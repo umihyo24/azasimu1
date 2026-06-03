@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Seal Colony MVP</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main class="game-shell">
+    <header class="hero">
+      <div>
+        <p class="eyebrow">MVP Colony Simulation</p>
+        <h1>Seal Colony Manager</h1>
+        <p class="subtitle">Guide one hardworking seal through the first survival loop: fish, store food, get hungry, and eat.</p>
+      </div>
+      <button id="startButton" type="button">Start Colony</button>
+    </header>
+
+    <section class="layout" aria-label="Game area">
+      <canvas id="gameCanvas" width="720" height="720" aria-label="Seal colony map" role="img"></canvas>
+
+      <aside class="panel" aria-label="Colony status">
+        <h2>Status</h2>
+        <dl class="stats">
+          <div>
+            <dt>Phase</dt>
+            <dd id="phaseValue">start</dd>
+          </div>
+          <div>
+            <dt>Sea Fish</dt>
+            <dd id="seaFishValue">0 / 100</dd>
+          </div>
+          <div>
+            <dt>Storage Fish</dt>
+            <dd id="storageValue">0</dd>
+          </div>
+          <div>
+            <dt>Seal Hunger</dt>
+            <dd id="hungerValue">0 / 100</dd>
+          </div>
+          <div>
+            <dt>Current Task</dt>
+            <dd id="taskValue">Waiting</dd>
+          </div>
+        </dl>
+
+        <div class="meter" aria-label="Seal hunger meter">
+          <span id="hungerBar"></span>
+        </div>
+
+        <section class="instructions">
+          <h3>How it works</h3>
+          <ol>
+            <li>The seal fishes in the sea.</li>
+            <li>It carries fish to food storage.</li>
+            <li>Hunger rises over time.</li>
+            <li>When hungry, it eats stored fish.</li>
+            <li>Sea fish regenerate slowly.</li>
+          </ol>
+        </section>
+      </aside>
+    </section>
+  </main>
+
+  <script src="main.js"></script>
+</body>
+</html>
