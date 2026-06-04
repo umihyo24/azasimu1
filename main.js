@@ -11,8 +11,15 @@ const CONFIG = Object.freeze({
   fishingWorkRequired: 2.4,
   fishingSpotFishMax: 20,
   fishingSpotWorkerSlots: 2,
+  dryingRackWorkerSlots: 1,
+  dryingRackFishInputMax: 8,
+  dryingRackDriedFishOutputMax: 6,
+  dryingRackFishPerBatch: 2,
+  dryingRackDriedFishPerBatch: 1,
+  dryingWorkRequired: 5.5,
   storageFishMax: 100,
   initialStorageFish: 8,
+  initialStorageDriedFish: 0,
   sealCount: 5,
   sealMoveTilesPerSecond: 3.8,
   hungerPerSecond: 1.05,
@@ -20,6 +27,7 @@ const CONFIG = Object.freeze({
   hungerCriticalThreshold: 82,
   maxHunger: 100,
   hungerReducedPerFish: 38,
+  hungerReducedPerDriedFish: 58,
   sealCarryCapacity: 5,
   maxDeltaSeconds: 0.1,
   assetSizeRatio: 0.78,
@@ -29,6 +37,7 @@ const CONFIG = Object.freeze({
   positions: Object.freeze({
     fishingSpot: Object.freeze({ x: 14, y: 8 }),
     storage: Object.freeze({ x: 18, y: 17 }),
+    dryingRack: Object.freeze({ x: 13, y: 17 }),
     seals: Object.freeze([
       Object.freeze({ x: 16, y: 18 }),
       Object.freeze({ x: 17, y: 19 }),
@@ -43,8 +52,9 @@ const TASKS = Object.freeze({
   idle: "Idle",
   fishing: "Fishing",
   waiting: "Waiting for space",
-  haulPickup: "Hauling: pickup fish",
-  haulDeposit: "Hauling: deposit fish",
+  haulPickup: "Hauling: pickup resource",
+  haulDeposit: "Hauling: deposit resource",
+  drying: "Drying fish",
   eating: "Eating",
   seekingFood: "Seeking food",
   wandering: "Wandering",
@@ -54,13 +64,21 @@ const TASKS = Object.freeze({
 const FACILITY_TYPES = Object.freeze({
   fishingSpot: "fishingSpot",
   storage: "storage",
+  dryingRack: "dryingRack",
+});
+
+const RESOURCES = Object.freeze({
+  fish: "fish",
+  driedFish: "driedFish",
 });
 
 const ASSETS = Object.freeze({
   seal: createImageAsset("Seal", "assets/seal.png", "#f7fbff", "#2e6071"),
   fishingSpot: createImageAsset("Fishing Spot", "assets/fishing-spot.png", "#73d7ff", "#004e70"),
   storage: createImageAsset("Storage", "assets/storage.png", "#c08a45", "#4d3218"),
+  dryingRack: createImageAsset("Drying Rack", "assets/drying-rack.png", "#d6a15c", "#5f3515"),
   fish: createImageAsset("Fish", "assets/fish.png", "#7de1ff", "#005a7a"),
+  driedFish: createImageAsset("Dried Fish", "assets/dried-fish.png", "#c9844a", "#4d2a17"),
 });
 
 const canvas = document.getElementById("gameCanvas");
@@ -74,6 +92,7 @@ function collectUi() {
     selectToolButton: document.getElementById("selectToolButton"),
     seaFishValue: document.getElementById("seaFishValue"),
     storedFishValue: document.getElementById("storedFishValue"),
+    storedDriedFishValue: document.getElementById("storedDriedFishValue"),
     sealCountValue: document.getElementById("sealCountValue"),
     phaseValue: document.getElementById("phaseValue"),
     inspectorContent: document.getElementById("inspectorContent"),
@@ -102,6 +121,7 @@ function createInitialGameState() {
     resources: { seaFish: CONFIG.initialSeaFish },
     facilities: [
       createFishingSpot("facility-fishing-1", "North Shoal Fishing Spot", CONFIG.positions.fishingSpot),
+      createDryingRack("facility-drying-1", "Sunward Drying Rack", CONFIG.positions.dryingRack),
       createStorage("facility-storage-1", "Beach Pantry", CONFIG.positions.storage),
     ],
     seals: CONFIG.positions.seals.map((position, index) => createSeal(index + 1, position)),
@@ -137,14 +157,30 @@ function createFishingSpot(id, name, position) {
   };
 }
 
+function createDryingRack(id, name, position) {
+  return {
+    id,
+    type: FACILITY_TYPES.dryingRack,
+    name,
+    position: { ...position },
+    workerSlots: CONFIG.dryingRackWorkerSlots,
+    priority: 2,
+    inventory: {
+      inputs: { fish: 0, fishMax: CONFIG.dryingRackFishInputMax },
+      outputs: { driedFish: 0, driedFishMax: CONFIG.dryingRackDriedFishOutputMax },
+    },
+    production: { progress: 0, workRequired: CONFIG.dryingWorkRequired },
+  };
+}
+
 function createStorage(id, name, position) {
   return {
     id,
     type: FACILITY_TYPES.storage,
     name,
     position: { ...position },
-    acceptedResources: { fish: true, water: false },
-    inventory: { fish: CONFIG.initialStorageFish, max: CONFIG.storageFishMax },
+    acceptedResources: { fish: true, driedFish: true, water: false },
+    inventory: { fish: CONFIG.initialStorageFish, driedFish: CONFIG.initialStorageDriedFish, max: CONFIG.storageFishMax },
   };
 }
 
@@ -171,7 +207,7 @@ function startGame() {
     resetGameState(gameState);
   }
   gameState.phase = "playing";
-  gameState.message = "Colony running: workers fish, haulers stock storage, hungry seals eat first.";
+  gameState.message = "Colony running: workers fish, drying racks preserve food, hungry seals eat first.";
   gameState.timing.lastFrameTime = performance.now();
   ui.startButton.textContent = "Restart Colony";
 }
@@ -221,7 +257,7 @@ function increaseAllHunger(state, deltaSeconds) {
 
 function assignFacilityWorkers(state) {
   state.seals.forEach((seal) => {
-    if (seal.assignedFacilityId && !canFacilityUseWorker(getFacilityById(state, seal.assignedFacilityId))) {
+    if (seal.assignedFacilityId && !seal.carryingItem && !canFacilityUseWorker(getFacilityById(state, seal.assignedFacilityId))) {
       seal.assignedFacilityId = null;
       seal.actionProgress = 0;
     }
@@ -237,12 +273,15 @@ function assignFacilityWorkers(state) {
 }
 
 function canFacilityUseWorker(facility) {
-  return Boolean(facility) && facility.type === FACILITY_TYPES.fishingSpot;
+  if (!facility) return false;
+  if (facility.type === FACILITY_TYPES.fishingSpot) return facility.inventory.fish < facility.inventory.fishMax;
+  if (facility.type === FACILITY_TYPES.dryingRack) return hasDryingRackOutputCapacity(facility);
+  return false;
 }
 
 function getWorkerFacilitiesByPriority(state) {
   return state.facilities
-    .filter((facility) => facility.type === FACILITY_TYPES.fishingSpot)
+    .filter((facility) => canFacilityUseWorker(facility))
     .sort((a, b) => b.priority - a.priority || a.id.localeCompare(b.id));
 }
 
@@ -259,21 +298,22 @@ function updateSeals(state, deltaSeconds) {
 
 function handleEatingPriority(state, seal, deltaSeconds) {
   if (!isHungry(seal)) return false;
-  const storage = seal.carryingItem === "fish" ? findStorageForEmergencyDeposit(state) : findStorageWithFish(state);
+  const storage = seal.carryingItem ? findStorageForEmergencyDeposit(state) : findStorageWithFood(state);
   seal.assignedFacilityId = null;
   seal.haulingPlan = null;
   if (!storage) {
-    setSealTask(seal, TASKS.starving, null, "Hungry; no stored fish available");
+    setSealTask(seal, TASKS.starving, null, "Hungry; no stored food available");
     return true;
   }
   setSealTask(seal, TASKS.seekingFood, storage.position, "Prioritizing food over work");
   if (moveSealTowardTarget(seal, deltaSeconds)) return true;
-  if (seal.carryingItem === "fish") depositFishToStorage(seal, storage);
-  if (storage.inventory.fish > 0) {
-    storage.inventory.fish -= 1;
-    seal.hunger = clamp(seal.hunger - CONFIG.hungerReducedPerFish, 0, CONFIG.maxHunger);
-    setSealTask(seal, TASKS.eating, storage.position, "Ate one fish from storage");
-    addFloatingTextEffect(state, "Nom", seal.position, "#fff1a8");
+  if (seal.carryingItem) depositResourceToStorage(seal, storage, seal.carryingItem);
+  const food = chooseBestStoredFood(storage);
+  if (food) {
+    removeStorageResource(storage, food.resource, 1);
+    seal.hunger = clamp(seal.hunger - food.hungerRestored, 0, CONFIG.maxHunger);
+    setSealTask(seal, TASKS.eating, storage.position, `Ate one ${food.label.toLowerCase()} from storage`);
+    addFloatingTextEffect(state, food.resource === RESOURCES.driedFish ? "Tasty!" : "Nom", seal.position, "#fff1a8");
   }
   return true;
 }
@@ -285,6 +325,11 @@ function updateAssignedWorker(state, seal, deltaSeconds) {
     return;
   }
   state.frameLists.assignedWorkerIds.push(seal.id);
+  if (facility.type === FACILITY_TYPES.fishingSpot) updateFishingWorker(state, seal, facility, deltaSeconds);
+  if (facility.type === FACILITY_TYPES.dryingRack) updateDryingRackWorker(state, seal, facility, deltaSeconds);
+}
+
+function updateFishingWorker(state, seal, facility, deltaSeconds) {
   setSealTask(seal, facility.inventory.fish >= facility.inventory.fishMax ? TASKS.waiting : TASKS.fishing, getWorkPositionForFacility(facility), `Assigned to ${facility.name}`);
   if (moveSealTowardTarget(seal, deltaSeconds)) return;
   if (facility.inventory.fish >= facility.inventory.fishMax) {
@@ -306,6 +351,67 @@ function updateAssignedWorker(state, seal, deltaSeconds) {
   }
 }
 
+function updateDryingRackWorker(state, seal, facility, deltaSeconds) {
+  if (seal.carryingItem === RESOURCES.fish) {
+    setSealTask(seal, TASKS.haulDeposit, facility.position, `Bringing fish to ${facility.name}`);
+    if (moveSealTowardTarget(seal, deltaSeconds)) return;
+    depositFishToDryingRack(seal, facility);
+  }
+  if (!hasDryingRackOutputCapacity(facility)) {
+    setSealTask(seal, TASKS.waiting, getWorkPositionForFacility(facility), "Drying rack output full");
+    seal.actionProgress = 0;
+    facility.production.progress = 0;
+    moveSealTowardTarget(seal, deltaSeconds);
+    return;
+  }
+  if (!hasDryingRackBatchInput(facility)) {
+    fetchDryingRackInput(state, seal, facility, deltaSeconds);
+    return;
+  }
+  setSealTask(seal, TASKS.drying, getWorkPositionForFacility(facility), `Drying fish at ${facility.name}`);
+  if (moveSealTowardTarget(seal, deltaSeconds)) return;
+  seal.actionProgress += deltaSeconds;
+  facility.production.progress = seal.actionProgress;
+  if (seal.actionProgress >= facility.production.workRequired) {
+    seal.actionProgress = 0;
+    facility.production.progress = 0;
+    facility.inventory.inputs.fish -= CONFIG.dryingRackFishPerBatch;
+    facility.inventory.outputs.driedFish += CONFIG.dryingRackDriedFishPerBatch;
+    addFloatingTextEffect(state, "+1 dried fish", facility.position, "#ffd166");
+  }
+}
+
+function fetchDryingRackInput(state, seal, facility, deltaSeconds) {
+  facility.production.progress = 0;
+  seal.actionProgress = 0;
+  const storage = findStorageWithResource(state, RESOURCES.fish);
+  if (!storage) {
+    setSealTask(seal, TASKS.waiting, getWorkPositionForFacility(facility), "Waiting for fish deliveries");
+    moveSealTowardTarget(seal, deltaSeconds);
+    return;
+  }
+  setSealTask(seal, TASKS.haulPickup, storage.position, `Fetching fish for ${facility.name}`);
+  if (moveSealTowardTarget(seal, deltaSeconds)) return;
+  const needed = facility.inventory.inputs.fishMax - facility.inventory.inputs.fish;
+  const amount = Math.min(CONFIG.sealCarryCapacity, needed, storage.inventory.fish);
+  if (amount <= 0) return;
+  removeStorageResource(storage, RESOURCES.fish, amount);
+  seal.carryingItem = RESOURCES.fish;
+  seal.carryingAmount = amount;
+}
+
+function hasDryingRackBatchInput(facility) {
+  return facility.inventory.inputs.fish >= CONFIG.dryingRackFishPerBatch;
+}
+
+function hasDryingRackInputCapacity(facility) {
+  return facility.inventory.inputs.fish < facility.inventory.inputs.fishMax;
+}
+
+function hasDryingRackOutputCapacity(facility) {
+  return facility.inventory.outputs.driedFish < facility.inventory.outputs.driedFishMax;
+}
+
 function updateHaulerOrWanderer(state, seal, deltaSeconds) {
   if (!seal.haulingPlan || !isHaulingPlanValid(state, seal.haulingPlan)) {
     seal.haulingPlan = findHaulingPlan(state);
@@ -320,48 +426,131 @@ function updateHaulerOrWanderer(state, seal, deltaSeconds) {
 }
 
 function findHaulingPlan(state) {
+  return findRackOutputHaulingPlan(state)
+    || findFishingSpotHaulingPlan(state)
+    || findRackInputHaulingPlan(state);
+}
+
+function findRackOutputHaulingPlan(state) {
+  const source = state.facilities.find((facility) => facility.type === FACILITY_TYPES.dryingRack && facility.inventory.outputs.driedFish > 0);
+  const destination = state.facilities.find((facility) => isStorageAcceptingResourceWithCapacity(facility, RESOURCES.driedFish));
+  return source && destination ? createHaulingPlan(source, destination, RESOURCES.driedFish, "output") : null;
+}
+
+function findFishingSpotHaulingPlan(state) {
   const source = state.facilities.find((facility) => facility.type === FACILITY_TYPES.fishingSpot && facility.inventory.fish > 0);
-  const destination = state.facilities.find((facility) => isStorageAcceptingFishWithCapacity(facility));
-  if (!source || !destination) return null;
-  return { sourceFacilityId: source.id, destinationFacilityId: destination.id, stage: "pickup" };
+  const destination = state.facilities.find((facility) => isStorageAcceptingResourceWithCapacity(facility, RESOURCES.fish));
+  return source && destination ? createHaulingPlan(source, destination, RESOURCES.fish, "inventory") : null;
+}
+
+function findRackInputHaulingPlan(state) {
+  const destination = state.facilities.find((facility) => facility.type === FACILITY_TYPES.dryingRack && hasDryingRackInputCapacity(facility));
+  const source = state.facilities.find((facility) => facility.type === FACILITY_TYPES.storage && facility.inventory.fish > 0);
+  return source && destination ? createHaulingPlan(source, destination, RESOURCES.fish, "input") : null;
+}
+
+function createHaulingPlan(source, destination, resource, destinationInventory) {
+  return { sourceFacilityId: source.id, destinationFacilityId: destination.id, resource, destinationInventory, stage: "pickup" };
 }
 
 function isHaulingPlanValid(state, plan) {
   const source = getFacilityById(state, plan.sourceFacilityId);
   const destination = getFacilityById(state, plan.destinationFacilityId);
-  if (!source || !destination || !isStorageAcceptingFishWithCapacity(destination)) return false;
-  return plan.stage === "deposit" || source.inventory.fish > 0;
+  if (!source || !destination) return false;
+  if (plan.stage === "deposit") return canDepositPlannedResource(destination, plan);
+  return getHaulingSourceAmount(source, plan) > 0 && canDepositPlannedResource(destination, plan);
+}
+
+function canDepositPlannedResource(destination, plan) {
+  if (destination.type === FACILITY_TYPES.storage) return isStorageAcceptingResourceWithCapacity(destination, plan.resource);
+  if (destination.type === FACILITY_TYPES.dryingRack && plan.destinationInventory === "input") return hasDryingRackInputCapacity(destination);
+  return false;
+}
+
+function getHaulingSourceAmount(source, plan) {
+  if (source.type === FACILITY_TYPES.fishingSpot && plan.resource === RESOURCES.fish) return source.inventory.fish;
+  if (source.type === FACILITY_TYPES.storage) return source.inventory[plan.resource] || 0;
+  if (source.type === FACILITY_TYPES.dryingRack && plan.resource === RESOURCES.driedFish) return source.inventory.outputs.driedFish;
+  return 0;
 }
 
 function updateHaulingTask(state, seal, deltaSeconds) {
   const source = getFacilityById(state, seal.haulingPlan.sourceFacilityId);
   const destination = getFacilityById(state, seal.haulingPlan.destinationFacilityId);
+  const resourceName = getResourceLabel(seal.haulingPlan.resource).toLowerCase();
   if (seal.haulingPlan.stage === "pickup") {
-    setSealTask(seal, TASKS.haulPickup, source.position, `Collecting fish from ${source.name}`);
+    setSealTask(seal, TASKS.haulPickup, source.position, `Collecting ${resourceName} from ${source.name}`);
     if (moveSealTowardTarget(seal, deltaSeconds)) return;
-    const amount = Math.min(CONFIG.sealCarryCapacity, source.inventory.fish);
-    source.inventory.fish -= amount;
-    seal.carryingItem = "fish";
-    seal.carryingAmount = amount;
+    if (pickupHaulingResource(seal, source, destination, seal.haulingPlan) <= 0) {
+      seal.haulingPlan = null;
+      return;
+    }
     seal.haulingPlan.stage = "deposit";
     return;
   }
-  setSealTask(seal, TASKS.haulDeposit, destination.position, `Delivering fish to ${destination.name}`);
+  setSealTask(seal, TASKS.haulDeposit, destination.position, `Delivering ${resourceName} to ${destination.name}`);
   if (moveSealTowardTarget(seal, deltaSeconds)) return;
-  depositFishToStorage(seal, destination);
+  depositCarriedResource(seal, destination, seal.haulingPlan);
   seal.haulingPlan = null;
 }
 
-function depositFishToStorage(seal, storage) {
-  if (seal.carryingItem !== "fish" || seal.carryingAmount <= 0) return;
-  const capacity = storage.inventory.max - storage.inventory.fish;
+function pickupHaulingResource(seal, source, destination, plan) {
+  const capacity = getDestinationResourceCapacity(destination, plan);
+  const amount = Math.min(CONFIG.sealCarryCapacity, getHaulingSourceAmount(source, plan), capacity);
+  if (amount <= 0) return 0;
+  removeFacilityResource(source, plan, amount);
+  seal.carryingItem = plan.resource;
+  seal.carryingAmount = amount;
+  return amount;
+}
+
+function depositCarriedResource(seal, destination, plan) {
+  if (destination.type === FACILITY_TYPES.storage) depositResourceToStorage(seal, destination, plan.resource);
+  if (destination.type === FACILITY_TYPES.dryingRack && plan.destinationInventory === "input") depositFishToDryingRack(seal, destination);
+}
+
+function removeFacilityResource(facility, plan, amount) {
+  if (amount <= 0) return;
+  if (facility.type === FACILITY_TYPES.fishingSpot && plan.resource === RESOURCES.fish) facility.inventory.fish -= amount;
+  if (facility.type === FACILITY_TYPES.storage) removeStorageResource(facility, plan.resource, amount);
+  if (facility.type === FACILITY_TYPES.dryingRack && plan.resource === RESOURCES.driedFish) facility.inventory.outputs.driedFish -= amount;
+}
+
+function getDestinationResourceCapacity(destination, plan) {
+  if (destination.type === FACILITY_TYPES.storage) return getStorageFreeCapacity(destination);
+  if (destination.type === FACILITY_TYPES.dryingRack && plan.destinationInventory === "input") return destination.inventory.inputs.fishMax - destination.inventory.inputs.fish;
+  return 0;
+}
+
+function depositFishToDryingRack(seal, facility) {
+  if (seal.carryingItem !== RESOURCES.fish || seal.carryingAmount <= 0) return;
+  const capacity = facility.inventory.inputs.fishMax - facility.inventory.inputs.fish;
   const deposited = Math.min(capacity, seal.carryingAmount);
-  storage.inventory.fish += deposited;
-  seal.carryingAmount -= deposited;
+  facility.inventory.inputs.fish += deposited;
+  removeFromSealCargo(seal, deposited);
+}
+
+function depositFishToStorage(seal, storage) {
+  depositResourceToStorage(seal, storage, RESOURCES.fish);
+}
+
+function depositResourceToStorage(seal, storage, resource) {
+  if (seal.carryingItem !== resource || seal.carryingAmount <= 0) return;
+  const deposited = Math.min(getStorageFreeCapacity(storage), seal.carryingAmount);
+  storage.inventory[resource] = (storage.inventory[resource] || 0) + deposited;
+  removeFromSealCargo(seal, deposited);
+}
+
+function removeFromSealCargo(seal, amount) {
+  seal.carryingAmount -= amount;
   if (seal.carryingAmount <= 0) {
     seal.carryingItem = null;
     seal.carryingAmount = 0;
   }
+}
+
+function removeStorageResource(storage, resource, amount) {
+  storage.inventory[resource] = Math.max(0, (storage.inventory[resource] || 0) - amount);
 }
 
 function updateWandering(state, seal, deltaSeconds) {
@@ -388,15 +577,41 @@ function isHungry(seal) {
 }
 
 function findStorageWithFish(state) {
-  return state.facilities.find((facility) => facility.type === FACILITY_TYPES.storage && facility.inventory.fish > 0);
+  return findStorageWithResource(state, RESOURCES.fish);
+}
+
+function findStorageWithResource(state, resource) {
+  return state.facilities.find((facility) => facility.type === FACILITY_TYPES.storage && (facility.inventory[resource] || 0) > 0);
+}
+
+function findStorageWithFood(state) {
+  return state.facilities.find((facility) => facility.type === FACILITY_TYPES.storage && Boolean(chooseBestStoredFood(facility)));
+}
+
+function chooseBestStoredFood(storage) {
+  if ((storage.inventory.driedFish || 0) > 0) return { resource: RESOURCES.driedFish, label: "Dried Fish", hungerRestored: CONFIG.hungerReducedPerDriedFish };
+  if ((storage.inventory.fish || 0) > 0) return { resource: RESOURCES.fish, label: "Fish", hungerRestored: CONFIG.hungerReducedPerFish };
+  return null;
 }
 
 function findStorageForEmergencyDeposit(state) {
-  return state.facilities.find((facility) => facility.type === FACILITY_TYPES.storage && facility.inventory.fish < facility.inventory.max);
+  return state.facilities.find((facility) => facility.type === FACILITY_TYPES.storage && getStorageFreeCapacity(facility) > 0);
 }
 
 function isStorageAcceptingFishWithCapacity(facility) {
-  return facility.type === FACILITY_TYPES.storage && facility.acceptedResources.fish && facility.inventory.fish < facility.inventory.max;
+  return isStorageAcceptingResourceWithCapacity(facility, RESOURCES.fish);
+}
+
+function isStorageAcceptingResourceWithCapacity(facility, resource) {
+  return facility.type === FACILITY_TYPES.storage && facility.acceptedResources[resource] && getStorageFreeCapacity(facility) > 0;
+}
+
+function getStorageFreeCapacity(storage) {
+  return Math.max(0, storage.inventory.max - getStorageUsed(storage));
+}
+
+function getStorageUsed(storage) {
+  return (storage.inventory.fish || 0) + (storage.inventory.driedFish || 0);
 }
 
 function setSealTask(seal, task, targetPosition, statusText) {
@@ -437,10 +652,9 @@ function addFloatingTextEffect(state, text, position, color) {
 
 function checkGameOver(state) {
   const starvingSeal = state.seals.find((seal) => seal.hunger >= CONFIG.maxHunger);
-  const totalStoredFish = getTotalStoredFish(state);
-  if (!starvingSeal || totalStoredFish > 0) return;
+  if (!starvingSeal || getTotalStoredFood(state) > 0) return;
   state.phase = "gameover";
-  state.message = `Game over: ${starvingSeal.name} reached maximum hunger with no stored fish.`;
+  state.message = `Game over: ${starvingSeal.name} reached maximum hunger with no stored food.`;
   starvingSeal.currentTask = TASKS.starving;
   ui.startButton.textContent = "Restart Colony";
 }
@@ -480,6 +694,7 @@ function drawFacility(state, facility) {
   const rect = facilityRect(facility);
   const selected = isSelected(state, "facility", facility.id);
   if (facility.type === FACILITY_TYPES.fishingSpot) drawFishingSpot(facility, rect);
+  if (facility.type === FACILITY_TYPES.dryingRack) drawDryingRack(facility, rect);
   if (facility.type === FACILITY_TYPES.storage) drawStorage(facility, rect);
   if (selected) drawSelectionRing(rect);
   drawFacilityLabel(facility, rect);
@@ -502,9 +717,32 @@ function drawFishingSpot(facility, rect) {
   context.restore();
 }
 
+function drawDryingRack(facility, rect) {
+  drawAssetOrPlaceholder(ASSETS.dryingRack, rect.x, rect.y, rect.width, rect.height, "☀️");
+  const progressPercent = Math.round(getProductionProgressPercent(facility));
+  drawInventorySign(`🐟${facility.inventory.inputs.fish} → 🐠${facility.inventory.outputs.driedFish}`, rect.x + rect.width / 2, rect.y - 12);
+  drawProgressBar(rect.x + 8, rect.y + rect.height - 16, rect.width - 16, 8, progressPercent / 100);
+}
+
 function drawStorage(facility, rect) {
   drawAssetOrPlaceholder(ASSETS.storage, rect.x, rect.y, rect.width, rect.height, "📦");
-  drawInventorySign(`${facility.inventory.fish}/${facility.inventory.max}`, rect.x + rect.width / 2, rect.y - 12);
+  drawInventorySign(`🐟${facility.inventory.fish} 🐠${facility.inventory.driedFish}`, rect.x + rect.width / 2, rect.y - 12);
+}
+
+function drawProgressBar(x, y, width, height, ratio) {
+  context.save();
+  context.fillStyle = "rgba(6,19,26,0.86)";
+  context.strokeStyle = "#fff1a8";
+  context.lineWidth = 2;
+  context.beginPath();
+  context.roundRect(x, y, width, height, 4);
+  context.fill();
+  context.stroke();
+  context.fillStyle = "#ffd166";
+  context.beginPath();
+  context.roundRect(x + 2, y + 2, Math.max(0, width - 4) * clamp(ratio, 0, 1), Math.max(0, height - 4), 3);
+  context.fill();
+  context.restore();
 }
 
 function drawSelectionRing(rect) {
@@ -517,7 +755,7 @@ function drawSelectionRing(rect) {
 }
 
 function drawFacilityLabel(facility, rect) {
-  drawTextLabel(facility.type === FACILITY_TYPES.fishingSpot ? "Fishing Spot" : "Storage", rect.x + rect.width / 2, rect.y + rect.height + 15, "#30200d", "900 12px sans-serif");
+  drawTextLabel(getFacilityTypeLabel(facility.type), rect.x + rect.width / 2, rect.y + rect.height + 15, "#30200d", "900 12px sans-serif");
 }
 
 function drawSeal(state, seal) {
@@ -533,7 +771,7 @@ function drawSeal(state, seal) {
   context.textAlign = "center";
   context.fillText(seal.name, drawRect.x + drawRect.width / 2, drawRect.y + drawRect.height + 9);
   context.restore();
-  if (seal.carryingItem === "fish") drawCarriedFishStack(drawRect.x + drawRect.width / 2, drawRect.y - 11, seal.carryingAmount);
+  if (seal.carryingItem) drawCarriedResourceStack(drawRect.x + drawRect.width / 2, drawRect.y - 11, seal.carryingAmount, seal.carryingItem);
   drawTaskBadge(seal, drawRect);
   drawHungerWarning(seal, drawRect);
 }
@@ -573,10 +811,12 @@ function drawHungerWarning(seal, rect) {
   context.restore();
 }
 
-function drawCarriedFishStack(centerX, y, amount) {
-  const visibleFish = Math.max(1, Math.min(amount, 5));
-  for (let index = 0; index < visibleFish; index += 1) {
-    drawAssetOrPlaceholder(ASSETS.fish, centerX - 13 + index * 6, y - index * 2, 18, 18, "🐟");
+function drawCarriedResourceStack(centerX, y, amount, resource) {
+  const visibleItems = Math.max(1, Math.min(amount, 5));
+  const asset = getResourceAsset(resource);
+  const fallback = resource === RESOURCES.driedFish ? "🐠" : "🐟";
+  for (let index = 0; index < visibleItems; index += 1) {
+    drawAssetOrPlaceholder(asset, centerX - 13 + index * 6, y - index * 2, 18, 18, fallback);
   }
 }
 
@@ -673,9 +913,9 @@ function drawOverlay(state) {
 }
 
 function renderUi(state) {
-  const totalStoredFish = getTotalStoredFish(state);
   ui.seaFishValue.textContent = `${Math.floor(state.resources.seaFish)} / ${CONFIG.maxSeaFish}`;
-  ui.storedFishValue.textContent = `${totalStoredFish} / ${CONFIG.storageFishMax}`;
+  ui.storedFishValue.textContent = `${getTotalStoredResource(state, RESOURCES.fish)} / ${CONFIG.storageFishMax}`;
+  ui.storedDriedFishValue.textContent = getTotalStoredResource(state, RESOURCES.driedFish);
   ui.sealCountValue.textContent = state.seals.length;
   ui.phaseValue.textContent = state.phase;
   ui.totalSealsValue.textContent = state.seals.length;
@@ -697,6 +937,7 @@ function renderInspector(state) {
   }
   if (selection.type === "seal") renderSealInspector(state, selected);
   if (selection.type === "facility" && selected.type === FACILITY_TYPES.fishingSpot) renderFishingSpotInspector(state, selected);
+  if (selection.type === "facility" && selected.type === FACILITY_TYPES.dryingRack) renderDryingRackInspector(state, selected);
   if (selection.type === "facility" && selected.type === FACILITY_TYPES.storage) renderStorageInspector(selected);
 }
 
@@ -711,12 +952,28 @@ function renderFishingSpotInspector(state, facility) {
   );
 }
 
+function renderDryingRackInspector(state, facility) {
+  ui.inspectorContent.append(
+    createInfoRow("Facility", facility.name),
+    createPriorityControls(facility),
+    createInfoRow("Worker Slots", facility.workerSlots),
+    createInfoRow("Assigned Workers", `${getAssignedWorkers(state, facility.id).length} / ${facility.workerSlots}`),
+    createInfoRow("Input Fish", `${facility.inventory.inputs.fish} / ${facility.inventory.inputs.fishMax}`),
+    createInfoRow("Output Dried Fish", `${facility.inventory.outputs.driedFish} / ${facility.inventory.outputs.driedFishMax}`),
+    createInfoRow("Recipe", `${CONFIG.dryingRackFishPerBatch} Fish → ${CONFIG.dryingRackDriedFishPerBatch} Dried Fish`),
+    createInfoRow("Production Progress", `${Math.round(getProductionProgressPercent(facility))}%`),
+  );
+}
+
 function renderStorageInspector(facility) {
   ui.inspectorContent.append(
     createInfoRow("Facility", facility.name),
     createToggleRow("Accept Fish", facility.acceptedResources.fish, () => { facility.acceptedResources.fish = !facility.acceptedResources.fish; }),
+    createToggleRow("Accept Dried Fish", facility.acceptedResources.driedFish, () => { facility.acceptedResources.driedFish = !facility.acceptedResources.driedFish; }),
     createToggleRow("Accept Water", facility.acceptedResources.water, () => { facility.acceptedResources.water = !facility.acceptedResources.water; }),
-    createInfoRow("Inventory", `${facility.inventory.fish} / ${facility.inventory.max} fish`),
+    createInfoRow("Fish", `${facility.inventory.fish} stored`),
+    createInfoRow("Dried Fish", `${facility.inventory.driedFish} stored`),
+    createInfoRow("Capacity", `${getStorageUsed(facility)} / ${facility.inventory.max}`),
   );
 }
 
@@ -733,7 +990,7 @@ function renderSealInspector(state, seal) {
     hungerRow,
     createInfoRow("Assigned Facility", assigned),
     createInfoRow("Current Task", seal.currentTask),
-    createInfoRow("Carrying Item", seal.carryingItem ? `${seal.carryingItem} x${seal.carryingAmount}` : "None"),
+    createInfoRow("Carrying Item", seal.carryingItem ? `${getResourceLabel(seal.carryingItem)} x${seal.carryingAmount}` : "None"),
     createInfoRow("Target", seal.targetPosition ? `(${seal.targetPosition.x.toFixed(0)}, ${seal.targetPosition.y.toFixed(0)})` : "None"),
     createInfoRow("Status", seal.statusText),
   );
@@ -821,7 +1078,40 @@ function getIdleCount(state) {
 }
 
 function getTotalStoredFish(state) {
-  return state.facilities.filter((facility) => facility.type === FACILITY_TYPES.storage).reduce((total, storage) => total + storage.inventory.fish, 0);
+  return getTotalStoredResource(state, RESOURCES.fish);
+}
+
+function getTotalStoredFood(state) {
+  return getTotalStoredResource(state, RESOURCES.fish) + getTotalStoredResource(state, RESOURCES.driedFish);
+}
+
+function getTotalStoredResource(state, resource) {
+  return state.facilities
+    .filter((facility) => facility.type === FACILITY_TYPES.storage)
+    .reduce((total, storage) => total + (storage.inventory[resource] || 0), 0);
+}
+
+function getProductionProgressPercent(facility) {
+  if (!facility.production?.workRequired) return 0;
+  return (facility.production.progress / facility.production.workRequired) * 100;
+}
+
+function getFacilityTypeLabel(type) {
+  if (type === FACILITY_TYPES.fishingSpot) return "Fishing Spot";
+  if (type === FACILITY_TYPES.dryingRack) return "Drying Rack";
+  if (type === FACILITY_TYPES.storage) return "Storage";
+  return "Facility";
+}
+
+function getResourceLabel(resource) {
+  if (resource === RESOURCES.driedFish) return "Dried Fish";
+  if (resource === RESOURCES.fish) return "Fish";
+  return resource;
+}
+
+function getResourceAsset(resource) {
+  if (resource === RESOURCES.driedFish) return ASSETS.driedFish;
+  return ASSETS.fish;
 }
 
 function getFacilityById(state, id) {
