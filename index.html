@@ -23,31 +23,44 @@
       <aside class="panel" aria-label="Colony status">
         <h2>Status</h2>
         <dl class="stats">
-          <div>
+          <div class="stat-row">
             <dt>Phase</dt>
             <dd id="phaseValue">start</dd>
           </div>
-          <div>
+          <div class="stat-row has-meter">
             <dt>Sea Fish</dt>
             <dd id="seaFishValue">0 / 100</dd>
+            <dd class="meter" aria-label="Sea fish meter">
+              <span id="seaFishBar"></span>
+            </dd>
           </div>
-          <div>
+          <div class="stat-row has-meter">
             <dt>Storage Fish</dt>
-            <dd id="storageValue">0</dd>
+            <dd id="storageValue">0 fish</dd>
+            <dd class="meter storage-meter" aria-label="Storage fish meter">
+              <span id="storageBar"></span>
+            </dd>
           </div>
-          <div>
+          <div class="stat-row has-meter">
             <dt>Seal Hunger</dt>
             <dd id="hungerValue">0 / 100</dd>
+            <dd class="meter hunger-meter" aria-label="Seal hunger meter">
+              <span id="hungerBar"></span>
+            </dd>
           </div>
-          <div>
+          <div class="stat-row">
             <dt>Current Task</dt>
             <dd id="taskValue">Waiting</dd>
           </div>
+          <div class="stat-row">
+            <dt>Carrying Item</dt>
+            <dd id="carryingValue">None</dd>
+          </div>
+          <div class="stat-row">
+            <dt>Target Destination</dt>
+            <dd id="targetValue">None</dd>
+          </div>
         </dl>
-
-        <div class="meter" aria-label="Seal hunger meter">
-          <span id="hungerBar"></span>
-        </div>
 
         <section class="instructions">
           <h3>How it works</h3>
