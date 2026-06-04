@@ -34,6 +34,10 @@ const CONFIG = Object.freeze({
   facilitySizeTiles: 2.4,
   floatingTextDuration: 1.1,
   wanderPauseSeconds: 1.4,
+  debug: false,
+  previewValidColor: "rgba(88, 255, 165, 0.42)",
+  previewInvalidColor: "rgba(255, 105, 120, 0.48)",
+  previewLineWidth: 4,
   positions: Object.freeze({
     fishingSpot: Object.freeze({ x: 14, y: 8 }),
     storage: Object.freeze({ x: 18, y: 17 }),
@@ -67,6 +71,13 @@ const FACILITY_TYPES = Object.freeze({
   dryingRack: "dryingRack",
 });
 
+const TOOL_MODES = Object.freeze({
+  select: "select",
+  buildFishingSpot: "buildFishingSpot",
+  buildStorage: "buildStorage",
+  demolish: "demolish",
+});
+
 const RESOURCES = Object.freeze({
   fish: "fish",
   driedFish: "driedFish",
@@ -90,6 +101,7 @@ function collectUi() {
   return {
     startButton: document.getElementById("startButton"),
     selectToolButton: document.getElementById("selectToolButton"),
+    toolButtons: Array.from(document.querySelectorAll(".tool-button")),
     seaFishValue: document.getElementById("seaFishValue"),
     storedFishValue: document.getElementById("storedFishValue"),
     storedDriedFishValue: document.getElementById("storedDriedFishValue"),
@@ -126,6 +138,9 @@ function createInitialGameState() {
     ],
     seals: CONFIG.positions.seals.map((position, index) => createSeal(index + 1, position)),
     selection: { type: "facility", id: "facility-fishing-1" },
+    toolMode: TOOL_MODES.select,
+    placementPreview: { isInsideCanvas: false, gridX: 0, gridY: 0 },
+    nextFacilityId: 2,
     visualEffects: [],
     frameLists: { assignedWorkerIds: [], haulingSealIds: [], wanderingSealIds: [] },
     timing: { lastFrameTime: performance.now(), animationTime: 0 },
@@ -668,6 +683,7 @@ function renderWorld(state) {
   clearCanvas();
   drawMap(state.map);
   state.facilities.forEach((facility) => drawFacility(state, facility));
+  drawPlacementPreview(state);
   state.seals.forEach((seal) => drawSeal(state, seal));
   drawVisualEffects(state.visualEffects);
   drawOverlay(state);
@@ -924,6 +940,7 @@ function renderUi(state) {
   ui.haulersValue.textContent = state.frameLists.haulingSealIds.length;
   ui.wanderingValue.textContent = state.frameLists.wanderingSealIds.length;
   ui.messageValue.textContent = state.message;
+  updateActiveToolButtons(state.toolMode);
   renderInspector(state);
 }
 
@@ -1039,17 +1056,197 @@ function clearElement(element) {
   while (element.firstChild) element.removeChild(element.firstChild);
 }
 
+function bindBuildMenuControls() {
+  ui.toolButtons.forEach((button) => {
+    const toolMode = button.dataset.toolMode;
+    if (!toolMode || button.disabled) return;
+    button.addEventListener("click", () => setToolMode(toolMode));
+  });
+}
+
+function setToolMode(toolMode) {
+  if (!Object.values(TOOL_MODES).includes(toolMode)) return;
+  const changed = gameState.toolMode !== toolMode;
+  gameState.toolMode = toolMode;
+  gameState.message = getToolModeMessage(toolMode);
+  updateActiveToolButtons(toolMode);
+  if (changed) logDebug("Tool mode:", gameState.toolMode);
+}
+
+function updateActiveToolButtons(toolMode) {
+  ui.toolButtons.forEach((button) => {
+    button.classList.toggle("active", button.dataset.toolMode === toolMode && !button.disabled);
+  });
+}
+
+function getToolModeMessage(toolMode) {
+  if (toolMode === TOOL_MODES.buildFishingSpot) return "Build mode active: click a valid sea tile to place a Fishing Spot.";
+  if (toolMode === TOOL_MODES.buildStorage) return "Build mode active: click a valid beach tile to place Storage.";
+  if (toolMode === TOOL_MODES.demolish) return "Demolish mode active: click a facility to remove it.";
+  return "Select mode active: click a seal or facility.";
+}
+
 function handleCanvasClick(event) {
-  const rect = canvas.getBoundingClientRect();
-  const x = ((event.clientX - rect.left) / rect.width) * canvas.width;
-  const y = ((event.clientY - rect.top) / rect.height) * canvas.height;
-  const clickedSeal = [...gameState.seals].reverse().find((seal) => pointInSeal(x, y, seal));
-  if (clickedSeal) {
-    gameState.selection = { type: "seal", id: clickedSeal.id };
+  const pointer = getCanvasPointer(event);
+  const gridPosition = canvasPointToGrid(pointer.x, pointer.y);
+  logDebug("Canvas click:", gridPosition.x, gridPosition.y, gameState.toolMode);
+
+  if (gameState.toolMode === TOOL_MODES.buildFishingSpot || gameState.toolMode === TOOL_MODES.buildStorage) {
+    placeFacilityFromTool(gameState, gridPosition);
     return;
   }
-  const clickedFacility = [...gameState.facilities].reverse().find((facility) => pointInRect(x, y, facilityRect(facility)));
-  if (clickedFacility) gameState.selection = { type: "facility", id: clickedFacility.id };
+
+  if (gameState.toolMode === TOOL_MODES.demolish) {
+    demolishFacilityAtPoint(gameState, pointer.x, pointer.y);
+    return;
+  }
+
+  selectEntityAtPoint(gameState, pointer.x, pointer.y);
+}
+
+function handleCanvasMouseMove(event) {
+  const pointer = getCanvasPointer(event);
+  const gridPosition = canvasPointToGrid(pointer.x, pointer.y);
+  gameState.placementPreview.isInsideCanvas = true;
+  gameState.placementPreview.gridX = gridPosition.x;
+  gameState.placementPreview.gridY = gridPosition.y;
+}
+
+function handleCanvasMouseLeave() {
+  gameState.placementPreview.isInsideCanvas = false;
+}
+
+function getCanvasPointer(event) {
+  const rect = canvas.getBoundingClientRect();
+  return {
+    x: ((event.clientX - rect.left) / rect.width) * canvas.width,
+    y: ((event.clientY - rect.top) / rect.height) * canvas.height,
+  };
+}
+
+function canvasPointToGrid(x, y) {
+  return { x: Math.floor(x / CONFIG.tileSize), y: Math.floor(y / CONFIG.tileSize) };
+}
+
+function selectEntityAtPoint(state, x, y) {
+  const clickedSeal = [...state.seals].reverse().find((seal) => pointInSeal(x, y, seal));
+  if (clickedSeal) {
+    state.selection = { type: "seal", id: clickedSeal.id };
+    state.message = `Selected seal: ${clickedSeal.name}.`;
+    return;
+  }
+  const clickedFacility = getFacilityAtPoint(state, x, y);
+  if (clickedFacility) {
+    state.selection = { type: "facility", id: clickedFacility.id };
+    state.message = `Selected ${clickedFacility.name}.`;
+    return;
+  }
+  state.selection = { type: "none", id: null };
+  state.message = "Nothing selected.";
+}
+
+function placeFacilityFromTool(state, position) {
+  const type = getBuildFacilityType(state.toolMode);
+  if (!type) return;
+  if (!canPlaceFacility(state, type, position)) {
+    state.message = `Cannot place ${getFacilityTypeLabel(type)} here.`;
+    return;
+  }
+
+  const facility = createFacilityForPlacement(state, type, position);
+  state.facilities.push(facility);
+  state.selection = { type: "facility", id: facility.id };
+  state.message = `Placed ${facility.name}.`;
+}
+
+function createFacilityForPlacement(state, type, position) {
+  const idNumber = state.nextFacilityId;
+  state.nextFacilityId += 1;
+  if (type === FACILITY_TYPES.fishingSpot) return createFishingSpot(`facility-fishing-${idNumber}`, `Fishing Spot ${idNumber}`, position);
+  return createStorage(`facility-storage-${idNumber}`, `Storage ${idNumber}`, position);
+}
+
+function demolishFacilityAtPoint(state, x, y) {
+  const facility = getFacilityAtPoint(state, x, y);
+  if (!facility) {
+    state.message = "No facility to demolish here.";
+    return;
+  }
+  state.facilities = state.facilities.filter((candidate) => candidate.id !== facility.id);
+  state.seals.forEach((seal) => {
+    if (seal.assignedFacilityId === facility.id) seal.assignedFacilityId = null;
+    if (seal.haulingPlan?.sourceId === facility.id || seal.haulingPlan?.destinationId === facility.id) seal.haulingPlan = null;
+  });
+  if (state.selection.id === facility.id) state.selection = { type: "none", id: null };
+  state.message = `Demolished ${facility.name}.`;
+}
+
+function getFacilityAtPoint(state, x, y) {
+  return [...state.facilities].reverse().find((facility) => pointInRect(x, y, facilityRect(facility)));
+}
+
+function drawPlacementPreview(state) {
+  const type = getBuildFacilityType(state.toolMode);
+  if (!type || !state.placementPreview.isInsideCanvas) return;
+  const position = { x: state.placementPreview.gridX, y: state.placementPreview.gridY };
+  const valid = canPlaceFacility(state, type, position);
+  const previewFacility = { type, position };
+  const rect = facilityRect(previewFacility);
+
+  context.save();
+  context.fillStyle = valid ? CONFIG.previewValidColor : CONFIG.previewInvalidColor;
+  context.strokeStyle = valid ? "#58ffa5" : "#ff6978";
+  context.lineWidth = CONFIG.previewLineWidth;
+  context.setLineDash([8, 6]);
+  context.beginPath();
+  context.roundRect(rect.x, rect.y, rect.width, rect.height, 10);
+  context.fill();
+  context.stroke();
+  context.fillStyle = "#ffffff";
+  context.font = "900 20px sans-serif";
+  context.textAlign = "center";
+  context.textBaseline = "middle";
+  context.fillText(type === FACILITY_TYPES.fishingSpot ? "🎣" : "📦", rect.x + rect.width / 2, rect.y + rect.height / 2);
+  context.restore();
+}
+
+function getBuildFacilityType(toolMode) {
+  if (toolMode === TOOL_MODES.buildFishingSpot) return FACILITY_TYPES.fishingSpot;
+  if (toolMode === TOOL_MODES.buildStorage) return FACILITY_TYPES.storage;
+  return null;
+}
+
+function canPlaceFacility(state, type, position) {
+  if (!isPositionInBounds(state.map, position)) return false;
+  if (!isFacilityRectInBounds(state.map, { type, position })) return false;
+  if (!isValidFacilityTerrain(state.map, type, position)) return false;
+  return !state.facilities.some((facility) => facilitiesOverlap(facility, { type, position }));
+}
+
+function isPositionInBounds(map, position) {
+  return position.x >= 0 && position.x < map.width && position.y >= 0 && position.y < map.height;
+}
+
+function isFacilityRectInBounds(map, facility) {
+  const rect = facilityRect(facility);
+  return rect.x >= 0 && rect.y >= 0 && rect.x + rect.width <= map.width * CONFIG.tileSize && rect.y + rect.height <= map.height * CONFIG.tileSize;
+}
+
+function isValidFacilityTerrain(map, type, position) {
+  const tile = map.tiles[position.y]?.[position.x];
+  if (type === FACILITY_TYPES.fishingSpot) return tile === "sea";
+  if (type === FACILITY_TYPES.storage) return tile === "beach";
+  return false;
+}
+
+function facilitiesOverlap(a, b) {
+  const aRect = facilityRect(a);
+  const bRect = facilityRect(b);
+  return aRect.x < bRect.x + bRect.width && aRect.x + aRect.width > bRect.x && aRect.y < bRect.y + bRect.height && aRect.y + aRect.height > bRect.y;
+}
+
+function logDebug(...args) {
+  if (CONFIG.debug) console.log(...args);
 }
 
 function pointInSeal(x, y, seal) {
@@ -1146,8 +1343,15 @@ function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
 }
 
-ui.startButton.addEventListener("click", startGame);
-ui.selectToolButton.addEventListener("click", () => { gameState.message = "Select mode active: click a seal or facility."; });
-canvas.addEventListener("click", handleCanvasClick);
-render(gameState);
-requestAnimationFrame(gameLoop);
+function initializeGame() {
+  ui.startButton.addEventListener("click", startGame);
+  bindBuildMenuControls();
+  canvas.addEventListener("click", handleCanvasClick);
+  canvas.addEventListener("mousemove", handleCanvasMouseMove);
+  canvas.addEventListener("mouseleave", handleCanvasMouseLeave);
+  updateActiveToolButtons(gameState.toolMode);
+  render(gameState);
+  requestAnimationFrame(gameLoop);
+}
+
+initializeGame();

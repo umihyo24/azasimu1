@@ -25,12 +25,13 @@
 
     <main class="game-layout" aria-label="Seal colony manager">
       <nav class="build-bar" aria-label="Build menu">
-        <button class="tool-button active" id="selectToolButton" type="button">☝<span>Select</span></button>
-        <button class="tool-button" type="button">🎣<span>Fishing Spot</span></button>
-        <button class="tool-button" type="button">📦<span>Storage</span></button>
-        <button class="tool-button" type="button">☀️<span>Drying Rack</span></button>
-        <button class="tool-button" type="button" disabled>🛤<span>Roads</span></button>
-        <button class="tool-button" type="button" disabled>🔬<span>Research</span></button>
+        <button class="tool-button active" id="selectToolButton" data-tool-mode="select" type="button">☝<span>Select</span></button>
+        <button class="tool-button" id="buildFishingSpotToolButton" data-tool-mode="buildFishingSpot" type="button">🎣<span>Fishing Spot</span></button>
+        <button class="tool-button" id="buildStorageToolButton" data-tool-mode="buildStorage" type="button">📦<span>Storage</span></button>
+        <button class="tool-button" id="demolishToolButton" data-tool-mode="demolish" type="button">🧹<span>Demolish</span></button>
+        <button class="tool-button" id="buildDryingRackToolButton" type="button" disabled>☀️<span>Drying Rack</span></button>
+        <button class="tool-button" id="roadsToolButton" type="button" disabled>🛤<span>Roads</span></button>
+        <button class="tool-button" id="researchToolButton" type="button" disabled>🔬<span>Research</span></button>
       </nav>
 
       <section class="map-card" aria-label="Map">
