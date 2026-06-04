@@ -117,13 +117,21 @@ canvas {
   margin: 0;
 }
 
-.stats div {
+.stat-row {
   display: grid;
   grid-template-columns: 1fr auto;
-  gap: 12px;
+  gap: 8px 12px;
   padding: 12px;
   background: var(--panel-soft);
   border-radius: 12px;
+}
+
+.stat-row.has-meter {
+  align-items: center;
+}
+
+.stat-row .meter {
+  grid-column: 1 / -1;
 }
 
 dt {
@@ -138,8 +146,8 @@ dd {
 }
 
 .meter {
-  height: 18px;
-  margin: 18px 0 24px;
+  height: 14px;
+  margin: 0;
   overflow: hidden;
   background: #071923;
   border-radius: 999px;
@@ -150,9 +158,17 @@ dd {
   display: block;
   width: 0%;
   height: 100%;
-  background: linear-gradient(90deg, var(--warning), var(--danger));
+  background: linear-gradient(90deg, #5de6ff, #4fffca);
   border-radius: inherit;
   transition: width 120ms linear;
+}
+
+.storage-meter span {
+  background: linear-gradient(90deg, #ffcf5a, #f08d3c);
+}
+
+.hunger-meter span {
+  background: linear-gradient(90deg, var(--warning), var(--danger));
 }
 
 .instructions {
