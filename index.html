@@ -3,78 +3,53 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Seal Colony MVP</title>
+  <title>Seal Colony Manager</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <main class="game-shell">
-    <header class="hero">
+  <div class="app-shell">
+    <header class="top-header">
       <div>
         <p class="eyebrow">MVP Colony Simulation</p>
-        <h1>Seal Colony Manager</h1>
-        <p class="subtitle">Guide one hardworking seal through the first survival loop: fish, store food, get hungry, and eat.</p>
+        <h1>Icewhisker Seal Colony</h1>
+      </div>
+      <div class="resource-strip" aria-label="Main resources">
+        <span>🌊 Sea Fish <strong id="seaFishValue">0 / 0</strong></span>
+        <span>🐟 Stored Fish <strong id="storedFishValue">0 / 0</strong></span>
+        <span>🦭 Seals <strong id="sealCountValue">0</strong></span>
+        <span>⏱ Phase <strong id="phaseValue">start</strong></span>
       </div>
       <button id="startButton" type="button">Start Colony</button>
     </header>
 
-    <section class="layout" aria-label="Game area">
-      <canvas id="gameCanvas" width="720" height="720" aria-label="Seal colony map" role="img"></canvas>
+    <main class="game-layout" aria-label="Seal colony manager">
+      <nav class="build-bar" aria-label="Build menu">
+        <button class="tool-button active" id="selectToolButton" type="button">☝<span>Select</span></button>
+        <button class="tool-button" type="button">🎣<span>Fishing Spot</span></button>
+        <button class="tool-button" type="button">📦<span>Storage</span></button>
+        <button class="tool-button" type="button" disabled>🛤<span>Roads</span></button>
+        <button class="tool-button" type="button" disabled>🔬<span>Research</span></button>
+      </nav>
 
-      <aside class="panel" aria-label="Colony status">
-        <h2>Status</h2>
-        <dl class="stats">
-          <div class="stat-row">
-            <dt>Phase</dt>
-            <dd id="phaseValue">start</dd>
-          </div>
-          <div class="stat-row has-meter">
-            <dt>Sea Fish</dt>
-            <dd id="seaFishValue">0 / 100</dd>
-            <dd class="meter" aria-label="Sea fish meter">
-              <span id="seaFishBar"></span>
-            </dd>
-          </div>
-          <div class="stat-row has-meter">
-            <dt>Storage Fish</dt>
-            <dd id="storageValue">0 fish</dd>
-            <dd class="meter storage-meter" aria-label="Storage fish meter">
-              <span id="storageBar"></span>
-            </dd>
-          </div>
-          <div class="stat-row has-meter">
-            <dt>Seal Hunger</dt>
-            <dd id="hungerValue">0 / 100</dd>
-            <dd class="meter hunger-meter" aria-label="Seal hunger meter">
-              <span id="hungerBar"></span>
-            </dd>
-          </div>
-          <div class="stat-row">
-            <dt>Current Task</dt>
-            <dd id="taskValue">Waiting</dd>
-          </div>
-          <div class="stat-row">
-            <dt>Carrying Item</dt>
-            <dd id="carryingValue">None</dd>
-          </div>
-          <div class="stat-row">
-            <dt>Target Destination</dt>
-            <dd id="targetValue">None</dd>
-          </div>
-        </dl>
+      <section class="map-card" aria-label="Map">
+        <canvas id="gameCanvas" width="720" height="720" aria-label="Seal colony map" role="img"></canvas>
+      </section>
 
-        <section class="instructions">
-          <h3>How it works</h3>
-          <ol>
-            <li>The seal fishes in the sea.</li>
-            <li>It carries fish to food storage.</li>
-            <li>Hunger rises over time.</li>
-            <li>When hungry, it eats stored fish.</li>
-            <li>Sea fish regenerate slowly.</li>
-          </ol>
-        </section>
+      <aside class="inspector-panel" aria-label="Inspector">
+        <h2>Inspector</h2>
+        <div id="inspectorContent" class="inspector-content"></div>
       </aside>
-    </section>
-  </main>
+    </main>
+
+    <footer class="bottom-panel" aria-label="Population and jobs">
+      <div><span>Total Seals</span><strong id="totalSealsValue">0</strong></div>
+      <div><span>Idle</span><strong id="idleValue">0</strong></div>
+      <div><span>Fishing Workers</span><strong id="fishingWorkersValue">0</strong></div>
+      <div><span>Haulers</span><strong id="haulersValue">0</strong></div>
+      <div><span>Wandering</span><strong id="wanderingValue">0</strong></div>
+      <div class="message"><span>Status</span><strong id="messageValue">Ready</strong></div>
+    </footer>
+  </div>
 
   <script src="main.js"></script>
 </body>
