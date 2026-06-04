@@ -1,86 +1,97 @@
 const CONFIG = Object.freeze({
   gridSize: 30,
   tileSize: 24,
-  seaRows: 10,
-  maxSeaFish: 100,
-  initialSeaFish: 84,
-  fishRegenPerSecond: 1.6,
-  fishCatchCost: 5,
-  minFishingEfficiency: 0.25,
-  fishingWorkRequired: 2.2,
-  sealMoveTilesPerSecond: 5,
-  hungerPerSecond: 2.1,
-  hungerEatThreshold: 58,
+  seaRows: 9,
+  maxSeaFish: 120,
+  initialSeaFish: 90,
+  seaFishRegenPerSecond: 0.65,
+  lowSeaFishEfficiencyFloor: 0.25,
+  fishCatchSeaCost: 3,
+  fishPerCatch: 1,
+  fishingWorkRequired: 2.4,
+  fishingSpotFishMax: 20,
+  fishingSpotWorkerSlots: 2,
+  storageFishMax: 100,
+  initialStorageFish: 8,
+  sealCount: 5,
+  sealMoveTilesPerSecond: 3.8,
+  hungerPerSecond: 1.05,
+  hungerEatThreshold: 52,
   hungerCriticalThreshold: 82,
   maxHunger: 100,
-  hungerReducedPerFish: 42,
-  storageStartingFish: 0,
-  storageVisualCapacity: 20,
-  fishPerCatch: 1,
-  buildingPosition: Object.freeze({ x: 15, y: 16 }),
-  sealStartPosition: Object.freeze({ x: 15, y: 18 }),
+  hungerReducedPerFish: 38,
+  sealCarryCapacity: 5,
+  maxDeltaSeconds: 0.1,
   assetSizeRatio: 0.78,
-  foodStorageSize: Object.freeze({ width: 3.8, height: 2.4 }),
-  floatingTextDuration: 1.15,
+  facilitySizeTiles: 2.4,
+  floatingTextDuration: 1.1,
+  wanderPauseSeconds: 1.4,
+  positions: Object.freeze({
+    fishingSpot: Object.freeze({ x: 14, y: 8 }),
+    storage: Object.freeze({ x: 18, y: 17 }),
+    seals: Object.freeze([
+      Object.freeze({ x: 16, y: 18 }),
+      Object.freeze({ x: 17, y: 19 }),
+      Object.freeze({ x: 18, y: 18 }),
+      Object.freeze({ x: 19, y: 19 }),
+      Object.freeze({ x: 20, y: 18 }),
+    ]),
+  }),
 });
-
-const ASSETS = {
-  seal: createImageAsset("Seal", "assets/seal.png", "#f7fbff", "#2e6071"),
-  storage: createImageAsset("Food Storage", "assets/food-storage.png", "#c08a45", "#4d3218"),
-  fish: createImageAsset("Fish", "assets/fish.png", "#73d7ff", "#004e70"),
-};
 
 const TASKS = Object.freeze({
-  waiting: "Waiting",
+  idle: "Idle",
   fishing: "Fishing",
-  delivering: "Delivering fish",
+  waiting: "Waiting for space",
+  haulPickup: "Hauling: pickup fish",
+  haulDeposit: "Hauling: deposit fish",
   eating: "Eating",
-  seekingFood: "Going to food storage",
-  gameover: "Starving",
+  seekingFood: "Seeking food",
+  wandering: "Wandering",
+  starving: "Starving",
 });
 
-const EFFECTS = Object.freeze({
-  floatingText: "floatingText",
+const FACILITY_TYPES = Object.freeze({
+  fishingSpot: "fishingSpot",
+  storage: "storage",
+});
+
+const ASSETS = Object.freeze({
+  seal: createImageAsset("Seal", "assets/seal.png", "#f7fbff", "#2e6071"),
+  fishingSpot: createImageAsset("Fishing Spot", "assets/fishing-spot.png", "#73d7ff", "#004e70"),
+  storage: createImageAsset("Storage", "assets/storage.png", "#c08a45", "#4d3218"),
+  fish: createImageAsset("Fish", "assets/fish.png", "#7de1ff", "#005a7a"),
 });
 
 const canvas = document.getElementById("gameCanvas");
 const context = canvas.getContext("2d");
-const ui = {
-  startButton: document.getElementById("startButton"),
-  phaseValue: document.getElementById("phaseValue"),
-  seaFishValue: document.getElementById("seaFishValue"),
-  storageValue: document.getElementById("storageValue"),
-  hungerValue: document.getElementById("hungerValue"),
-  taskValue: document.getElementById("taskValue"),
-  carryingValue: document.getElementById("carryingValue"),
-  targetValue: document.getElementById("targetValue"),
-  seaFishBar: document.getElementById("seaFishBar"),
-  storageBar: document.getElementById("storageBar"),
-  hungerBar: document.getElementById("hungerBar"),
-};
-
+const ui = collectUi();
 const gameState = createInitialGameState();
 
+function collectUi() {
+  return {
+    startButton: document.getElementById("startButton"),
+    selectToolButton: document.getElementById("selectToolButton"),
+    seaFishValue: document.getElementById("seaFishValue"),
+    storedFishValue: document.getElementById("storedFishValue"),
+    sealCountValue: document.getElementById("sealCountValue"),
+    phaseValue: document.getElementById("phaseValue"),
+    inspectorContent: document.getElementById("inspectorContent"),
+    totalSealsValue: document.getElementById("totalSealsValue"),
+    idleValue: document.getElementById("idleValue"),
+    fishingWorkersValue: document.getElementById("fishingWorkersValue"),
+    haulersValue: document.getElementById("haulersValue"),
+    wanderingValue: document.getElementById("wanderingValue"),
+    messageValue: document.getElementById("messageValue"),
+  };
+}
+
 function createImageAsset(name, src, primaryColor, secondaryColor) {
-  const asset = {
-    name,
-    src,
-    image: new Image(),
-    loaded: false,
-    failed: false,
-    primaryColor,
-    secondaryColor,
-  };
-
-  asset.image.onload = () => {
-    asset.loaded = true;
-  };
-
-  asset.image.onerror = () => {
-    asset.failed = true;
-  };
-
-  asset.image.src = src;
+  const image = new Image();
+  const asset = { name, src, image, loaded: false, failed: false, primaryColor, secondaryColor };
+  image.onload = () => { asset.loaded = true; };
+  image.onerror = () => { asset.failed = true; };
+  image.src = src;
   return asset;
 }
 
@@ -88,25 +99,22 @@ function createInitialGameState() {
   return {
     phase: "start",
     map: createMap(),
-    resources: {
-      seaFish: CONFIG.initialSeaFish,
-    },
-    buildings: {
-      foodStorage: createFoodStorage(CONFIG.buildingPosition.x, CONFIG.buildingPosition.y),
-    },
-    seals: [createSeal(CONFIG.sealStartPosition.x, CONFIG.sealStartPosition.y)],
+    resources: { seaFish: CONFIG.initialSeaFish },
+    facilities: [
+      createFishingSpot("facility-fishing-1", "North Shoal Fishing Spot", CONFIG.positions.fishingSpot),
+      createStorage("facility-storage-1", "Beach Pantry", CONFIG.positions.storage),
+    ],
+    seals: CONFIG.positions.seals.map((position, index) => createSeal(index + 1, position)),
+    selection: { type: "facility", id: "facility-fishing-1" },
     visualEffects: [],
-    timing: {
-      lastFrameTime: performance.now(),
-      animationTime: 0,
-    },
-    message: "Press Start Colony to begin.",
+    frameLists: { assignedWorkerIds: [], haulingSealIds: [], wanderingSealIds: [] },
+    timing: { lastFrameTime: performance.now(), animationTime: 0 },
+    message: "Start the colony to begin the simulation.",
   };
 }
 
 function createMap() {
   const tiles = [];
-
   for (let y = 0; y < CONFIG.gridSize; y += 1) {
     const row = [];
     for (let x = 0; x < CONFIG.gridSize; x += 1) {
@@ -114,27 +122,47 @@ function createMap() {
     }
     tiles.push(row);
   }
-
   return { width: CONFIG.gridSize, height: CONFIG.gridSize, tiles };
 }
 
-function createFoodStorage(x, y) {
+function createFishingSpot(id, name, position) {
   return {
-    type: "foodStorage",
-    label: "Food Storage",
-    position: { x, y },
-    inventory: { fish: CONFIG.storageStartingFish },
+    id,
+    type: FACILITY_TYPES.fishingSpot,
+    name,
+    position: { ...position },
+    workerSlots: CONFIG.fishingSpotWorkerSlots,
+    priority: 3,
+    inventory: { fish: 0, fishMax: CONFIG.fishingSpotFishMax },
   };
 }
 
-function createSeal(x, y) {
+function createStorage(id, name, position) {
   return {
-    position: { x, y },
-    hunger: 0,
+    id,
+    type: FACILITY_TYPES.storage,
+    name,
+    position: { ...position },
+    acceptedResources: { fish: true, water: false },
+    inventory: { fish: CONFIG.initialStorageFish, max: CONFIG.storageFishMax },
+  };
+}
+
+function createSeal(id, position) {
+  return {
+    id,
+    name: ["Nami", "Brisk", "Kelp", "Toto", "Mochi"][id - 1],
+    position: { ...position },
+    hunger: id * 4,
     carryingItem: null,
-    currentTask: TASKS.waiting,
-    target: null,
+    carryingAmount: 0,
+    assignedFacilityId: null,
+    currentTask: TASKS.idle,
+    targetPosition: null,
+    statusText: "Waiting for orders",
     actionProgress: 0,
+    wanderPause: 0,
+    haulingPlan: null,
   };
 }
 
@@ -142,133 +170,253 @@ function startGame() {
   if (gameState.phase !== "start") {
     resetGameState(gameState);
   }
-
   gameState.phase = "playing";
-  gameState.message = "The seal colony is active.";
+  gameState.message = "Colony running: workers fish, haulers stock storage, hungry seals eat first.";
   gameState.timing.lastFrameTime = performance.now();
   ui.startButton.textContent = "Restart Colony";
 }
 
 function resetGameState(state) {
-  const freshState = createInitialGameState();
-  state.phase = freshState.phase;
-  state.map = freshState.map;
-  state.resources = freshState.resources;
-  state.buildings = freshState.buildings;
-  state.seals = freshState.seals;
-  state.visualEffects = freshState.visualEffects;
-  state.timing = freshState.timing;
-  state.message = freshState.message;
+  const fresh = createInitialGameState();
+  Object.keys(fresh).forEach((key) => { state[key] = fresh[key]; });
 }
 
 function gameLoop(timestamp) {
-  const deltaSeconds = Math.min((timestamp - gameState.timing.lastFrameTime) / 1000, 0.1);
+  const deltaSeconds = Math.min((timestamp - gameState.timing.lastFrameTime) / 1000, CONFIG.maxDeltaSeconds);
   gameState.timing.lastFrameTime = timestamp;
   gameState.timing.animationTime += deltaSeconds;
-
   update(gameState, deltaSeconds);
   render(gameState);
-
   requestAnimationFrame(gameLoop);
 }
 
 function update(state, deltaSeconds) {
+  cleanDynamicArrays(state);
   if (state.phase !== "playing") {
     return;
   }
-
   regenerateSeaFish(state, deltaSeconds);
+  increaseAllHunger(state, deltaSeconds);
+  assignFacilityWorkers(state);
   updateSeals(state, deltaSeconds);
   updateVisualEffects(state, deltaSeconds);
   checkGameOver(state);
 }
 
+function cleanDynamicArrays(state) {
+  state.frameLists.assignedWorkerIds.length = 0;
+  state.frameLists.haulingSealIds.length = 0;
+  state.frameLists.wanderingSealIds.length = 0;
+}
+
 function regenerateSeaFish(state, deltaSeconds) {
-  state.resources.seaFish = clamp(
-    state.resources.seaFish + CONFIG.fishRegenPerSecond * deltaSeconds,
-    0,
-    CONFIG.maxSeaFish,
-  );
+  state.resources.seaFish = clamp(state.resources.seaFish + CONFIG.seaFishRegenPerSecond * deltaSeconds, 0, CONFIG.maxSeaFish);
+}
+
+function increaseAllHunger(state, deltaSeconds) {
+  state.seals.forEach((seal) => {
+    seal.hunger = clamp(seal.hunger + CONFIG.hungerPerSecond * deltaSeconds, 0, CONFIG.maxHunger);
+  });
+}
+
+function assignFacilityWorkers(state) {
+  state.seals.forEach((seal) => {
+    if (seal.assignedFacilityId && !canFacilityUseWorker(getFacilityById(state, seal.assignedFacilityId))) {
+      seal.assignedFacilityId = null;
+      seal.actionProgress = 0;
+    }
+  });
+
+  getWorkerFacilitiesByPriority(state).forEach((facility) => {
+    while (getAssignedWorkers(state, facility.id).length < facility.workerSlots && canFacilityUseWorker(facility)) {
+      const seal = state.seals.find((candidate) => !candidate.assignedFacilityId && !isHungry(candidate) && !candidate.carryingItem);
+      if (!seal) break;
+      seal.assignedFacilityId = facility.id;
+    }
+  });
+}
+
+function canFacilityUseWorker(facility) {
+  return Boolean(facility) && facility.type === FACILITY_TYPES.fishingSpot;
+}
+
+function getWorkerFacilitiesByPriority(state) {
+  return state.facilities
+    .filter((facility) => facility.type === FACILITY_TYPES.fishingSpot)
+    .sort((a, b) => b.priority - a.priority || a.id.localeCompare(b.id));
 }
 
 function updateSeals(state, deltaSeconds) {
   state.seals.forEach((seal) => {
-    increaseHunger(seal, deltaSeconds);
-    assignSealTask(state, seal);
-    performSealTask(state, seal, deltaSeconds);
+    if (handleEatingPriority(state, seal, deltaSeconds)) return;
+    if (seal.assignedFacilityId) {
+      updateAssignedWorker(state, seal, deltaSeconds);
+      return;
+    }
+    updateHaulerOrWanderer(state, seal, deltaSeconds);
   });
 }
 
-function increaseHunger(seal, deltaSeconds) {
-  seal.hunger = clamp(seal.hunger + CONFIG.hungerPerSecond * deltaSeconds, 0, CONFIG.maxHunger);
+function handleEatingPriority(state, seal, deltaSeconds) {
+  if (!isHungry(seal)) return false;
+  const storage = seal.carryingItem === "fish" ? findStorageForEmergencyDeposit(state) : findStorageWithFish(state);
+  seal.assignedFacilityId = null;
+  seal.haulingPlan = null;
+  if (!storage) {
+    setSealTask(seal, TASKS.starving, null, "Hungry; no stored fish available");
+    return true;
+  }
+  setSealTask(seal, TASKS.seekingFood, storage.position, "Prioritizing food over work");
+  if (moveSealTowardTarget(seal, deltaSeconds)) return true;
+  if (seal.carryingItem === "fish") depositFishToStorage(seal, storage);
+  if (storage.inventory.fish > 0) {
+    storage.inventory.fish -= 1;
+    seal.hunger = clamp(seal.hunger - CONFIG.hungerReducedPerFish, 0, CONFIG.maxHunger);
+    setSealTask(seal, TASKS.eating, storage.position, "Ate one fish from storage");
+    addFloatingTextEffect(state, "Nom", seal.position, "#fff1a8");
+  }
+  return true;
 }
 
-function assignSealTask(state, seal) {
-  const storage = state.buildings.foodStorage;
-
-  if (isSealHungry(seal) && storage.inventory.fish > 0) {
-    setSealTask(seal, TASKS.seekingFood, storage.position);
+function updateAssignedWorker(state, seal, deltaSeconds) {
+  const facility = getFacilityById(state, seal.assignedFacilityId);
+  if (!facility) {
+    seal.assignedFacilityId = null;
     return;
   }
-
-  if (seal.carryingItem) {
-    setSealTask(seal, TASKS.delivering, storage.position);
-    return;
-  }
-
-  setSealTask(seal, TASKS.fishing, findBestFishingTile(state));
-}
-
-function performSealTask(state, seal, deltaSeconds) {
-  if (moveSealTowardTarget(seal, deltaSeconds)) {
+  state.frameLists.assignedWorkerIds.push(seal.id);
+  setSealTask(seal, facility.inventory.fish >= facility.inventory.fishMax ? TASKS.waiting : TASKS.fishing, getWorkPositionForFacility(facility), `Assigned to ${facility.name}`);
+  if (moveSealTowardTarget(seal, deltaSeconds)) return;
+  if (facility.inventory.fish >= facility.inventory.fishMax) {
+    seal.statusText = "Fishing spot inventory full";
     seal.actionProgress = 0;
     return;
   }
-
-  if (seal.currentTask === TASKS.seekingFood) {
-    eatFromStorage(state, seal);
+  if (state.resources.seaFish <= 0) {
+    seal.statusText = "Waiting for sea fish";
+    seal.actionProgress = 0;
     return;
   }
-
-  if (seal.currentTask === TASKS.delivering) {
-    deliverCarriedFish(state, seal);
-    return;
-  }
-
-  if (seal.currentTask === TASKS.fishing) {
-    fishFromSea(state, seal, deltaSeconds);
+  seal.actionProgress += getFishingEfficiency(state) * deltaSeconds;
+  if (seal.actionProgress >= CONFIG.fishingWorkRequired) {
+    seal.actionProgress = 0;
+    state.resources.seaFish = Math.max(0, state.resources.seaFish - CONFIG.fishCatchSeaCost);
+    facility.inventory.fish = Math.min(facility.inventory.fishMax, facility.inventory.fish + CONFIG.fishPerCatch);
+    addFloatingTextEffect(state, "+1 fish", facility.position, "#9bedff");
   }
 }
 
-function isSealHungry(seal) {
+function updateHaulerOrWanderer(state, seal, deltaSeconds) {
+  if (!seal.haulingPlan || !isHaulingPlanValid(state, seal.haulingPlan)) {
+    seal.haulingPlan = findHaulingPlan(state);
+  }
+  if (seal.haulingPlan) {
+    updateHaulingTask(state, seal, deltaSeconds);
+    state.frameLists.haulingSealIds.push(seal.id);
+    return;
+  }
+  updateWandering(state, seal, deltaSeconds);
+  state.frameLists.wanderingSealIds.push(seal.id);
+}
+
+function findHaulingPlan(state) {
+  const source = state.facilities.find((facility) => facility.type === FACILITY_TYPES.fishingSpot && facility.inventory.fish > 0);
+  const destination = state.facilities.find((facility) => isStorageAcceptingFishWithCapacity(facility));
+  if (!source || !destination) return null;
+  return { sourceFacilityId: source.id, destinationFacilityId: destination.id, stage: "pickup" };
+}
+
+function isHaulingPlanValid(state, plan) {
+  const source = getFacilityById(state, plan.sourceFacilityId);
+  const destination = getFacilityById(state, plan.destinationFacilityId);
+  if (!source || !destination || !isStorageAcceptingFishWithCapacity(destination)) return false;
+  return plan.stage === "deposit" || source.inventory.fish > 0;
+}
+
+function updateHaulingTask(state, seal, deltaSeconds) {
+  const source = getFacilityById(state, seal.haulingPlan.sourceFacilityId);
+  const destination = getFacilityById(state, seal.haulingPlan.destinationFacilityId);
+  if (seal.haulingPlan.stage === "pickup") {
+    setSealTask(seal, TASKS.haulPickup, source.position, `Collecting fish from ${source.name}`);
+    if (moveSealTowardTarget(seal, deltaSeconds)) return;
+    const amount = Math.min(CONFIG.sealCarryCapacity, source.inventory.fish);
+    source.inventory.fish -= amount;
+    seal.carryingItem = "fish";
+    seal.carryingAmount = amount;
+    seal.haulingPlan.stage = "deposit";
+    return;
+  }
+  setSealTask(seal, TASKS.haulDeposit, destination.position, `Delivering fish to ${destination.name}`);
+  if (moveSealTowardTarget(seal, deltaSeconds)) return;
+  depositFishToStorage(seal, destination);
+  seal.haulingPlan = null;
+}
+
+function depositFishToStorage(seal, storage) {
+  if (seal.carryingItem !== "fish" || seal.carryingAmount <= 0) return;
+  const capacity = storage.inventory.max - storage.inventory.fish;
+  const deposited = Math.min(capacity, seal.carryingAmount);
+  storage.inventory.fish += deposited;
+  seal.carryingAmount -= deposited;
+  if (seal.carryingAmount <= 0) {
+    seal.carryingItem = null;
+    seal.carryingAmount = 0;
+  }
+}
+
+function updateWandering(state, seal, deltaSeconds) {
+  if (!seal.targetPosition || samePosition(seal.position, seal.targetPosition)) {
+    seal.wanderPause -= deltaSeconds;
+    if (seal.wanderPause <= 0) {
+      seal.targetPosition = getWanderPosition(seal.id, state.timing.animationTime);
+      seal.wanderPause = CONFIG.wanderPauseSeconds;
+    }
+  }
+  setSealTask(seal, TASKS.wandering, seal.targetPosition, "No hauling work available");
+  moveSealTowardTarget(seal, deltaSeconds);
+}
+
+function getWanderPosition(seed, time) {
+  const beachMinY = CONFIG.seaRows + 3;
+  const x = 4 + ((seed * 7 + Math.floor(time * 0.3) * 5) % (CONFIG.gridSize - 8));
+  const y = beachMinY + ((seed * 5 + Math.floor(time * 0.2) * 3) % (CONFIG.gridSize - beachMinY - 3));
+  return { x, y };
+}
+
+function isHungry(seal) {
   return seal.hunger >= CONFIG.hungerEatThreshold;
 }
 
-function setSealTask(seal, task, target) {
-  if (seal.currentTask !== task || !samePosition(seal.target, target)) {
-    seal.currentTask = task;
-    seal.target = { x: target.x, y: target.y };
-    seal.actionProgress = 0;
-  }
+function findStorageWithFish(state) {
+  return state.facilities.find((facility) => facility.type === FACILITY_TYPES.storage && facility.inventory.fish > 0);
+}
+
+function findStorageForEmergencyDeposit(state) {
+  return state.facilities.find((facility) => facility.type === FACILITY_TYPES.storage && facility.inventory.fish < facility.inventory.max);
+}
+
+function isStorageAcceptingFishWithCapacity(facility) {
+  return facility.type === FACILITY_TYPES.storage && facility.acceptedResources.fish && facility.inventory.fish < facility.inventory.max;
+}
+
+function setSealTask(seal, task, targetPosition, statusText) {
+  if (seal.currentTask !== task) seal.actionProgress = 0;
+  seal.currentTask = task;
+  seal.targetPosition = targetPosition ? { x: targetPosition.x, y: targetPosition.y } : null;
+  seal.statusText = statusText;
 }
 
 function moveSealTowardTarget(seal, deltaSeconds) {
-  if (!seal.target || samePosition(seal.position, seal.target)) {
-    return false;
-  }
-
-  const moveBudget = CONFIG.sealMoveTilesPerSecond * deltaSeconds;
-  seal.position = movePointToward(seal.position, seal.target, moveBudget);
-  return !samePosition(seal.position, seal.target);
+  if (!seal.targetPosition || samePosition(seal.position, seal.targetPosition)) return false;
+  seal.position = movePointToward(seal.position, seal.targetPosition, CONFIG.sealMoveTilesPerSecond * deltaSeconds);
+  return !samePosition(seal.position, seal.targetPosition);
 }
 
 function movePointToward(position, target, distance) {
   const next = { x: position.x, y: position.y };
   let remaining = distance;
-
   remaining = moveAxisToward(next, target, "x", remaining);
   moveAxisToward(next, target, "y", remaining);
-
   return next;
 }
 
@@ -279,88 +427,21 @@ function moveAxisToward(position, target, axis, distance) {
   return distance - Math.abs(step);
 }
 
-function eatFromStorage(state, seal) {
-  const storage = state.buildings.foodStorage;
-
-  if (storage.inventory.fish <= 0) {
-    seal.currentTask = TASKS.waiting;
-    return;
-  }
-
-  storage.inventory.fish -= 1;
-  seal.hunger = clamp(seal.hunger - CONFIG.hungerReducedPerFish, 0, CONFIG.maxHunger);
-  seal.currentTask = TASKS.eating;
-  seal.actionProgress = 0;
-  addFloatingTextEffect(state, "Nom", seal.position, "#fff1a8");
-}
-
-function deliverCarriedFish(state, seal) {
-  if (!seal.carryingItem) {
-    return;
-  }
-
-  const storage = state.buildings.foodStorage;
-  storage.inventory.fish += seal.carryingItem.amount;
-  seal.carryingItem = null;
-  seal.currentTask = TASKS.waiting;
-  seal.actionProgress = 0;
-}
-
-function fishFromSea(state, seal, deltaSeconds) {
-  if (state.resources.seaFish < CONFIG.fishCatchCost * CONFIG.minFishingEfficiency) {
-    seal.currentTask = TASKS.waiting;
-    return;
-  }
-
-  seal.actionProgress += getFishingEfficiency(state) * deltaSeconds;
-
-  if (seal.actionProgress >= CONFIG.fishingWorkRequired) {
-    const fishCost = Math.min(CONFIG.fishCatchCost, state.resources.seaFish);
-    state.resources.seaFish -= fishCost;
-    seal.carryingItem = { type: "fish", amount: CONFIG.fishPerCatch };
-    seal.actionProgress = 0;
-    seal.currentTask = TASKS.delivering;
-  }
-}
-
 function updateVisualEffects(state, deltaSeconds) {
-  state.visualEffects = state.visualEffects
-    .map((effect) => ({ ...effect, age: effect.age + deltaSeconds }))
-    .filter((effect) => effect.age < effect.duration);
+  state.visualEffects = state.visualEffects.map((effect) => ({ ...effect, age: effect.age + deltaSeconds })).filter((effect) => effect.age < effect.duration);
 }
 
 function addFloatingTextEffect(state, text, position, color) {
-  state.visualEffects.push({
-    type: EFFECTS.floatingText,
-    text,
-    position: { x: position.x, y: position.y },
-    color,
-    age: 0,
-    duration: CONFIG.floatingTextDuration,
-  });
-}
-
-function getFishingEfficiency(state) {
-  const stockRatio = state.resources.seaFish / CONFIG.maxSeaFish;
-  return clamp(stockRatio, CONFIG.minFishingEfficiency, 1);
-}
-
-function findBestFishingTile(state) {
-  const x = clamp(Math.round(state.buildings.foodStorage.position.x), 0, state.map.width - 1);
-  const y = Math.max(0, CONFIG.seaRows - 2);
-  return { x, y };
+  state.visualEffects.push({ text, position: { x: position.x, y: position.y }, color, age: 0, duration: CONFIG.floatingTextDuration });
 }
 
 function checkGameOver(state) {
   const starvingSeal = state.seals.find((seal) => seal.hunger >= CONFIG.maxHunger);
-
-  if (!starvingSeal) {
-    return;
-  }
-
+  const totalStoredFish = getTotalStoredFish(state);
+  if (!starvingSeal || totalStoredFish > 0) return;
   state.phase = "gameover";
-  starvingSeal.currentTask = TASKS.gameover;
-  state.message = "Game over: the seal reached maximum hunger.";
+  state.message = `Game over: ${starvingSeal.name} reached maximum hunger with no stored fish.`;
+  starvingSeal.currentTask = TASKS.starving;
   ui.startButton.textContent = "Restart Colony";
 }
 
@@ -372,8 +453,8 @@ function render(state) {
 function renderWorld(state) {
   clearCanvas();
   drawMap(state.map);
-  drawStorage(state.buildings.foodStorage);
-  state.seals.forEach((seal) => drawSeal(seal, state.timing.animationTime));
+  state.facilities.forEach((facility) => drawFacility(state, facility));
+  state.seals.forEach((seal) => drawSeal(state, seal));
   drawVisualEffects(state.visualEffects);
   drawOverlay(state);
 }
@@ -384,180 +465,119 @@ function clearCanvas() {
 
 function drawMap(map) {
   for (let y = 0; y < map.height; y += 1) {
-    for (let x = 0; x < map.width; x += 1) {
-      drawTile(x, y, map.tiles[y][x]);
-    }
+    for (let x = 0; x < map.width; x += 1) drawTile(x, y, map.tiles[y][x]);
   }
 }
 
 function drawTile(x, y, type) {
-  const colors = getTileColors(type);
-  const px = x * CONFIG.tileSize;
-  const py = y * CONFIG.tileSize;
-
-  context.fillStyle = colors.base;
-  context.fillRect(px, py, CONFIG.tileSize, CONFIG.tileSize);
-  context.strokeStyle = colors.line;
-  context.strokeRect(px, py, CONFIG.tileSize, CONFIG.tileSize);
+  context.fillStyle = type === "sea" ? "#1a8fbd" : "#d4b071";
+  context.fillRect(x * CONFIG.tileSize, y * CONFIG.tileSize, CONFIG.tileSize, CONFIG.tileSize);
+  context.strokeStyle = type === "sea" ? "rgba(160,230,255,0.16)" : "rgba(70,45,12,0.15)";
+  context.strokeRect(x * CONFIG.tileSize, y * CONFIG.tileSize, CONFIG.tileSize, CONFIG.tileSize);
 }
 
-function getTileColors(type) {
-  if (type === "sea") {
-    return { base: "#1a8fbd", line: "rgba(160, 230, 255, 0.16)" };
-  }
-
-  return { base: "#d4b071", line: "rgba(70, 45, 12, 0.15)" };
+function drawFacility(state, facility) {
+  const rect = facilityRect(facility);
+  const selected = isSelected(state, "facility", facility.id);
+  if (facility.type === FACILITY_TYPES.fishingSpot) drawFishingSpot(facility, rect);
+  if (facility.type === FACILITY_TYPES.storage) drawStorage(facility, rect);
+  if (selected) drawSelectionRing(rect);
+  drawFacilityLabel(facility, rect);
 }
 
-function drawStorage(storage) {
-  const rect = buildingRect(storage.position.x, storage.position.y, CONFIG.foodStorageSize.width, CONFIG.foodStorageSize.height);
-  drawStorageBuilding(rect);
-  drawTextLabel(storage.label, rect.x + rect.width / 2, rect.y + rect.height + 20, "#3a2410", "900 14px sans-serif");
-  drawInventorySign(`${storage.inventory.fish} fish`, rect.x + rect.width / 2, rect.y - 13);
-}
-
-function drawStorageBuilding(rect) {
+function drawFishingSpot(facility, rect) {
+  drawAssetOrPlaceholder(ASSETS.fishingSpot, rect.x, rect.y, rect.width, rect.height, "🎣");
   context.save();
-  context.fillStyle = "#8b5a2b";
-  context.strokeStyle = "#3b220e";
-  context.lineWidth = 3;
-  context.beginPath();
-  context.roundRect(rect.x, rect.y + rect.height * 0.24, rect.width, rect.height * 0.76, 8);
-  context.fill();
-  context.stroke();
-
-  context.fillStyle = "#c98134";
-  context.beginPath();
-  context.moveTo(rect.x - 8, rect.y + rect.height * 0.3);
-  context.lineTo(rect.x + rect.width / 2, rect.y);
-  context.lineTo(rect.x + rect.width + 8, rect.y + rect.height * 0.3);
-  context.closePath();
-  context.fill();
-  context.stroke();
-
-  context.fillStyle = "#4a2b12";
-  context.fillRect(rect.x + rect.width * 0.12, rect.y + rect.height * 0.46, rect.width * 0.23, rect.height * 0.3);
-  context.fillRect(rect.x + rect.width * 0.65, rect.y + rect.height * 0.46, rect.width * 0.23, rect.height * 0.3);
-  context.fillStyle = "#593318";
-  context.fillRect(rect.x + rect.width * 0.42, rect.y + rect.height * 0.44, rect.width * 0.16, rect.height * 0.56);
-  context.restore();
-}
-
-function drawSeal(seal, animationTime) {
-  const rect = gridRect(seal.position.x, seal.position.y, CONFIG.assetSizeRatio);
-  const moving = isSealMoving(seal);
-  const bob = moving ? Math.sin(animationTime * 13) * 3 : Math.sin(animationTime * 3) * 1.2;
-  const stretch = moving ? Math.sin(animationTime * 13) * 1.5 : 0;
-  const animatedRect = {
-    x: rect.x - stretch / 2,
-    y: rect.y + bob,
-    width: rect.size + stretch,
-    height: rect.size - stretch,
-  };
-
-  drawSealBody(seal, animatedRect);
-  drawTaskFeedback(seal, animatedRect, animationTime);
-  drawHungerWarning(seal, animatedRect.x, animatedRect.y, animatedRect.width);
-}
-
-function drawSealBody(seal, rect) {
-  if (ASSETS.seal.loaded && !ASSETS.seal.failed) {
-    context.drawImage(ASSETS.seal.image, rect.x, rect.y, rect.width, rect.height);
-  } else {
-    drawSealPlaceholder(rect.x, rect.y, rect.width, rect.height);
-  }
-
-  if (seal.carryingItem) {
-    drawCarriedFishStack(rect.x + rect.width * 0.5, rect.y - 10, seal.carryingItem.amount);
-  }
-}
-
-function drawSealPlaceholder(x, y, width, height) {
-  context.save();
-  context.fillStyle = "#f7fbff";
-  context.strokeStyle = "#2e6071";
-  context.lineWidth = 3;
-  context.beginPath();
-  context.ellipse(x + width * 0.5, y + height * 0.56, width * 0.48, height * 0.31, -0.12, 0, Math.PI * 2);
-  context.fill();
-  context.stroke();
-
-  context.fillStyle = "#d7eef8";
-  context.beginPath();
-  context.ellipse(x + width * 0.74, y + height * 0.42, width * 0.22, height * 0.2, 0.2, 0, Math.PI * 2);
-  context.fill();
-  context.stroke();
-
-  context.fillStyle = "#163947";
-  context.beginPath();
-  context.arc(x + width * 0.8, y + height * 0.37, 2.5, 0, Math.PI * 2);
-  context.fill();
-
-  context.fillStyle = "#8fb7c4";
-  context.beginPath();
-  context.moveTo(x + width * 0.13, y + height * 0.57);
-  context.lineTo(x - width * 0.08, y + height * 0.42);
-  context.lineTo(x - width * 0.03, y + height * 0.73);
-  context.closePath();
-  context.fill();
-  context.stroke();
-  context.restore();
-}
-
-function drawTaskFeedback(seal, rect, animationTime) {
-  if (seal.currentTask === TASKS.fishing && !isSealMoving(seal)) {
-    drawFishingParticles(rect.x + rect.width * 0.5, rect.y + rect.height * 0.22, animationTime);
-  }
-
-  if (seal.currentTask === TASKS.delivering && seal.carryingItem) {
-    drawDeliveryBadge(rect.x + rect.width * 0.5, rect.y - 30);
-  }
-}
-
-function drawFishingParticles(centerX, centerY, animationTime) {
-  const icons = ["🐟", "•", "🐟"];
-
-  context.save();
-  context.textAlign = "center";
-  context.textBaseline = "middle";
-  icons.forEach((icon, index) => {
-    const phase = animationTime * 4 + index * 1.8;
-    const x = centerX + Math.cos(phase) * (18 + index * 4);
-    const y = centerY - 18 + Math.sin(phase) * 8;
-    context.globalAlpha = 0.55 + Math.sin(phase) * 0.25;
-    context.fillStyle = index === 1 ? "#d9fbff" : "#9bedff";
-    context.font = index === 1 ? "900 18px sans-serif" : "18px sans-serif";
-    context.fillText(icon, x, y);
-  });
-  context.restore();
-}
-
-function drawDeliveryBadge(x, y) {
-  context.save();
-  context.fillStyle = "rgba(8, 32, 44, 0.9)";
+  context.fillStyle = "rgba(6,19,26,0.86)";
   context.strokeStyle = "#9bedff";
   context.lineWidth = 2;
   context.beginPath();
-  context.roundRect(x - 34, y - 14, 68, 28, 14);
+  context.roundRect(rect.x + 8, rect.y + rect.height - 24, rect.width - 16, 22, 8);
   context.fill();
   context.stroke();
   context.fillStyle = "#ffffff";
-  context.font = "800 12px sans-serif";
+  context.font = "900 12px sans-serif";
+  context.textAlign = "center";
+  context.fillText(`${facility.inventory.fish}/${facility.inventory.fishMax} fish`, rect.x + rect.width / 2, rect.y + rect.height - 9);
+  context.restore();
+}
+
+function drawStorage(facility, rect) {
+  drawAssetOrPlaceholder(ASSETS.storage, rect.x, rect.y, rect.width, rect.height, "📦");
+  drawInventorySign(`${facility.inventory.fish}/${facility.inventory.max}`, rect.x + rect.width / 2, rect.y - 12);
+}
+
+function drawSelectionRing(rect) {
+  context.save();
+  context.strokeStyle = "#fff1a8";
+  context.lineWidth = 4;
+  context.setLineDash([8, 5]);
+  context.strokeRect(rect.x - 5, rect.y - 5, rect.width + 10, rect.height + 10);
+  context.restore();
+}
+
+function drawFacilityLabel(facility, rect) {
+  drawTextLabel(facility.type === FACILITY_TYPES.fishingSpot ? "Fishing Spot" : "Storage", rect.x + rect.width / 2, rect.y + rect.height + 15, "#30200d", "900 12px sans-serif");
+}
+
+function drawSeal(state, seal) {
+  const rect = gridRect(seal.position.x, seal.position.y, CONFIG.assetSizeRatio);
+  const moving = seal.targetPosition && !samePosition(seal.position, seal.targetPosition);
+  const bob = Math.sin(state.timing.animationTime * (moving ? 12 : 3) + seal.id) * (moving ? 3 : 1.2);
+  const drawRect = { x: rect.x, y: rect.y + bob, width: rect.size, height: rect.size };
+  if (isSelected(state, "seal", seal.id)) drawSelectionRing({ x: drawRect.x, y: drawRect.y, width: drawRect.width, height: drawRect.height });
+  drawAssetOrPlaceholder(ASSETS.seal, drawRect.x, drawRect.y, drawRect.width, drawRect.height, `${seal.id}`);
+  context.save();
+  context.fillStyle = "#06131a";
+  context.font = "900 10px sans-serif";
+  context.textAlign = "center";
+  context.fillText(seal.name, drawRect.x + drawRect.width / 2, drawRect.y + drawRect.height + 9);
+  context.restore();
+  if (seal.carryingItem === "fish") drawCarriedFishStack(drawRect.x + drawRect.width / 2, drawRect.y - 11, seal.carryingAmount);
+  drawTaskBadge(seal, drawRect);
+  drawHungerWarning(seal, drawRect);
+}
+
+function drawTaskBadge(seal, rect) {
+  const icon = getTaskIcon(seal.currentTask);
+  context.save();
+  context.fillStyle = "rgba(6,19,26,0.86)";
+  context.strokeStyle = "rgba(255,255,255,0.7)";
+  context.beginPath();
+  context.roundRect(rect.x + rect.width - 3, rect.y - 10, 24, 20, 8);
+  context.fill();
+  context.stroke();
+  context.font = "14px sans-serif";
   context.textAlign = "center";
   context.textBaseline = "middle";
-  context.fillText("Delivering", x, y + 1);
+  context.fillText(icon, rect.x + rect.width + 9, rect.y);
+  context.restore();
+}
+
+function getTaskIcon(task) {
+  if (task === TASKS.fishing) return "🎣";
+  if (task === TASKS.haulPickup || task === TASKS.haulDeposit) return "📦";
+  if (task === TASKS.seekingFood || task === TASKS.eating) return "🍽";
+  if (task === TASKS.wandering) return "…";
+  if (task === TASKS.starving) return "!";
+  return "•";
+}
+
+function drawHungerWarning(seal, rect) {
+  if (seal.hunger < CONFIG.hungerCriticalThreshold) return;
+  context.save();
+  context.fillStyle = CONFIG.maxHunger <= seal.hunger ? "#ff6978" : "#ffd166";
+  context.font = "900 18px sans-serif";
+  context.textAlign = "center";
+  context.fillText("!", rect.x + rect.width / 2, rect.y - 9);
   context.restore();
 }
 
 function drawCarriedFishStack(centerX, y, amount) {
-  const visibleFish = Math.max(1, Math.min(amount, 3));
+  const visibleFish = Math.max(1, Math.min(amount, 5));
   for (let index = 0; index < visibleFish; index += 1) {
-    drawCarriedItem(centerX - 11 + index * 10, y - index * 2);
+    drawAssetOrPlaceholder(ASSETS.fish, centerX - 13 + index * 6, y - index * 2, 18, 18, "🐟");
   }
-}
-
-function drawCarriedItem(x, y) {
-  drawAssetOrPlaceholder(ASSETS.fish, x, y, 22, 22, "F");
 }
 
 function drawAssetOrPlaceholder(asset, x, y, width, height, label) {
@@ -565,7 +585,6 @@ function drawAssetOrPlaceholder(asset, x, y, width, height, label) {
     context.drawImage(asset.image, x, y, width, height);
     return;
   }
-
   drawVisiblePlaceholder(asset, x, y, width, height, label);
 }
 
@@ -575,29 +594,28 @@ function drawVisiblePlaceholder(asset, x, y, width, height, label) {
   context.strokeStyle = asset.secondaryColor;
   context.lineWidth = 3;
   context.beginPath();
-  context.roundRect(x, y, width, height, 8);
+  context.roundRect(x, y, width, height, 9);
   context.fill();
   context.stroke();
-
   context.fillStyle = asset.secondaryColor;
-  context.font = `${Math.max(10, Math.floor(width / 4))}px sans-serif`;
+  context.font = `900 ${Math.max(12, Math.floor(width * 0.28))}px sans-serif`;
   context.textAlign = "center";
   context.textBaseline = "middle";
-  context.fillText(label, x + width / 2, y + height / 2, width - 4);
+  context.fillText(label, x + width / 2, y + height / 2);
   context.restore();
 }
 
 function drawInventorySign(text, x, y) {
   context.save();
-  context.fillStyle = "rgba(8, 32, 44, 0.92)";
+  context.fillStyle = "rgba(6,19,26,0.92)";
   context.strokeStyle = "#ffffff";
   context.lineWidth = 2;
   context.beginPath();
-  context.roundRect(x - 36, y - 14, 72, 28, 10);
+  context.roundRect(x - 38, y - 13, 76, 26, 9);
   context.fill();
   context.stroke();
   context.fillStyle = "#ffffff";
-  context.font = "900 13px sans-serif";
+  context.font = "900 12px sans-serif";
   context.textAlign = "center";
   context.textBaseline = "middle";
   context.fillText(text, x, y + 1);
@@ -606,11 +624,11 @@ function drawInventorySign(text, x, y) {
 
 function drawTextLabel(text, x, y, color, font) {
   context.save();
-  context.fillStyle = "rgba(255, 246, 221, 0.86)";
-  context.strokeStyle = "rgba(59, 34, 14, 0.55)";
+  context.fillStyle = "rgba(255,246,221,0.88)";
+  context.strokeStyle = "rgba(59,34,14,0.55)";
   context.lineWidth = 2;
   context.beginPath();
-  context.roundRect(x - 48, y - 13, 96, 26, 8);
+  context.roundRect(x - 48, y - 12, 96, 24, 8);
   context.fill();
   context.stroke();
   context.fillStyle = color;
@@ -621,52 +639,28 @@ function drawTextLabel(text, x, y, color, font) {
   context.restore();
 }
 
-function drawHungerWarning(seal, x, y, size) {
-  if (seal.hunger < CONFIG.hungerCriticalThreshold) {
-    return;
-  }
-
-  context.save();
-  context.fillStyle = "#ff6978";
-  context.font = "900 16px sans-serif";
-  context.textAlign = "center";
-  context.fillText("!", x + size / 2, y - 5);
-  context.restore();
-}
-
 function drawVisualEffects(effects) {
   effects.forEach((effect) => {
-    if (effect.type === EFFECTS.floatingText) {
-      drawFloatingTextEffect(effect);
-    }
+    const progress = effect.age / effect.duration;
+    const x = effect.position.x * CONFIG.tileSize + CONFIG.tileSize / 2;
+    const y = effect.position.y * CONFIG.tileSize - progress * 30;
+    context.save();
+    context.globalAlpha = 1 - progress;
+    context.fillStyle = effect.color;
+    context.strokeStyle = "#3b220e";
+    context.lineWidth = 4;
+    context.font = "900 18px sans-serif";
+    context.textAlign = "center";
+    context.strokeText(effect.text, x, y);
+    context.fillText(effect.text, x, y);
+    context.restore();
   });
 }
 
-function drawFloatingTextEffect(effect) {
-  const progress = effect.age / effect.duration;
-  const x = effect.position.x * CONFIG.tileSize + CONFIG.tileSize / 2;
-  const y = effect.position.y * CONFIG.tileSize - progress * 34;
-
-  context.save();
-  context.globalAlpha = 1 - progress;
-  context.fillStyle = effect.color;
-  context.strokeStyle = "#3b220e";
-  context.lineWidth = 4;
-  context.font = "900 20px sans-serif";
-  context.textAlign = "center";
-  context.textBaseline = "middle";
-  context.strokeText(effect.text, x, y);
-  context.fillText(effect.text, x, y);
-  context.restore();
-}
-
 function drawOverlay(state) {
-  if (state.phase === "playing") {
-    return;
-  }
-
+  if (state.phase === "playing") return;
   context.save();
-  context.fillStyle = "rgba(3, 12, 18, 0.62)";
+  context.fillStyle = "rgba(3,12,18,0.62)";
   context.fillRect(0, 0, canvas.width, canvas.height);
   context.fillStyle = "#ffffff";
   context.font = "900 34px sans-serif";
@@ -679,88 +673,182 @@ function drawOverlay(state) {
 }
 
 function renderUi(state) {
-  const seal = state.seals[0];
-  const seaFish = Math.floor(state.resources.seaFish);
-  const storageFish = state.buildings.foodStorage.inventory.fish;
-
+  const totalStoredFish = getTotalStoredFish(state);
+  ui.seaFishValue.textContent = `${Math.floor(state.resources.seaFish)} / ${CONFIG.maxSeaFish}`;
+  ui.storedFishValue.textContent = `${totalStoredFish} / ${CONFIG.storageFishMax}`;
+  ui.sealCountValue.textContent = state.seals.length;
   ui.phaseValue.textContent = state.phase;
-  ui.seaFishValue.textContent = `${seaFish} / ${CONFIG.maxSeaFish}`;
-  ui.storageValue.textContent = `${storageFish} fish`;
-  ui.hungerValue.textContent = `${Math.floor(seal.hunger)} / ${CONFIG.maxHunger}`;
-  ui.taskValue.textContent = seal.currentTask;
-  ui.carryingValue.textContent = formatCarryingItem(seal.carryingItem);
-  ui.targetValue.textContent = formatTargetDestination(seal.currentTask, seal.target);
-  setProgressBar(ui.seaFishBar, seaFish, CONFIG.maxSeaFish);
-  setProgressBar(ui.storageBar, storageFish, CONFIG.storageVisualCapacity);
-  setProgressBar(ui.hungerBar, seal.hunger, CONFIG.maxHunger);
+  ui.totalSealsValue.textContent = state.seals.length;
+  ui.idleValue.textContent = getIdleCount(state);
+  ui.fishingWorkersValue.textContent = state.frameLists.assignedWorkerIds.length;
+  ui.haulersValue.textContent = state.frameLists.haulingSealIds.length;
+  ui.wanderingValue.textContent = state.frameLists.wanderingSealIds.length;
+  ui.messageValue.textContent = state.message;
+  renderInspector(state);
 }
 
-function setProgressBar(element, value, maxValue) {
-  element.style.width = `${(clamp(value, 0, maxValue) / maxValue) * 100}%`;
-}
-
-function formatCarryingItem(carryingItem) {
-  if (!carryingItem) {
-    return "None";
+function renderInspector(state) {
+  const selection = state.selection;
+  const selected = selection.type === "seal" ? getSealById(state, selection.id) : getFacilityById(state, selection.id);
+  clearElement(ui.inspectorContent);
+  if (!selected) {
+    ui.inspectorContent.append(createInfoRow("Selection", "Nothing selected"));
+    return;
   }
-
-  return `${capitalize(carryingItem.type)} x${carryingItem.amount}`;
+  if (selection.type === "seal") renderSealInspector(state, selected);
+  if (selection.type === "facility" && selected.type === FACILITY_TYPES.fishingSpot) renderFishingSpotInspector(state, selected);
+  if (selection.type === "facility" && selected.type === FACILITY_TYPES.storage) renderStorageInspector(selected);
 }
 
-function formatTargetDestination(task, target) {
-  if (!target) {
-    return "None";
-  }
-
-  const destinationName = getDestinationName(task);
-  return `${destinationName} (${target.x.toFixed(0)}, ${target.y.toFixed(0)})`;
+function renderFishingSpotInspector(state, facility) {
+  ui.inspectorContent.append(
+    createInfoRow("Facility", facility.name),
+    createPriorityControls(facility),
+    createInfoRow("Worker Slots", facility.workerSlots),
+    createInfoRow("Assigned Workers", `${getAssignedWorkers(state, facility.id).length} / ${facility.workerSlots}`),
+    createInfoRow("Internal Fish", `${facility.inventory.fish} / ${facility.inventory.fishMax}`),
+    createInfoRow("Fishing Efficiency", `${Math.round(getFishingEfficiency(state) * 100)}%`),
+  );
 }
 
-function getDestinationName(task) {
-  if (task === TASKS.fishing) {
-    return "Sea fishing tile";
-  }
-
-  if (task === TASKS.delivering || task === TASKS.seekingFood) {
-    return "Food Storage";
-  }
-
-  return "Current tile";
+function renderStorageInspector(facility) {
+  ui.inspectorContent.append(
+    createInfoRow("Facility", facility.name),
+    createToggleRow("Accept Fish", facility.acceptedResources.fish, () => { facility.acceptedResources.fish = !facility.acceptedResources.fish; }),
+    createToggleRow("Accept Water", facility.acceptedResources.water, () => { facility.acceptedResources.water = !facility.acceptedResources.water; }),
+    createInfoRow("Inventory", `${facility.inventory.fish} / ${facility.inventory.max} fish`),
+  );
 }
 
-function capitalize(value) {
-  return `${value.charAt(0).toUpperCase()}${value.slice(1)}`;
+function renderSealInspector(state, seal) {
+  const assigned = seal.assignedFacilityId ? getFacilityById(state, seal.assignedFacilityId)?.name : "None";
+  const hungerRow = createInfoRow("Hunger", `${Math.floor(seal.hunger)} / ${CONFIG.maxHunger}`);
+  const meter = createElement("div", "meter");
+  const fill = createElement("span");
+  fill.style.width = `${(seal.hunger / CONFIG.maxHunger) * 100}%`;
+  meter.append(fill);
+  hungerRow.append(meter);
+  ui.inspectorContent.append(
+    createInfoRow("Seal", `#${seal.id} ${seal.name}`),
+    hungerRow,
+    createInfoRow("Assigned Facility", assigned),
+    createInfoRow("Current Task", seal.currentTask),
+    createInfoRow("Carrying Item", seal.carryingItem ? `${seal.carryingItem} x${seal.carryingAmount}` : "None"),
+    createInfoRow("Target", seal.targetPosition ? `(${seal.targetPosition.x.toFixed(0)}, ${seal.targetPosition.y.toFixed(0)})` : "None"),
+    createInfoRow("Status", seal.statusText),
+  );
+}
+
+function createPriorityControls(facility) {
+  const row = createElement("div", "info-row");
+  row.append(createElement("span", "", "Priority"));
+  const controls = createElement("div", "control-row");
+  const minus = createElement("button", "small-button", "−");
+  const value = createElement("strong", "", facility.priority);
+  const plus = createElement("button", "small-button", "+");
+  minus.type = "button";
+  plus.type = "button";
+  minus.addEventListener("click", () => { facility.priority = clamp(facility.priority - 1, 1, 5); });
+  plus.addEventListener("click", () => { facility.priority = clamp(facility.priority + 1, 1, 5); });
+  controls.append(minus, value, plus);
+  row.append(controls);
+  return row;
+}
+
+function createToggleRow(label, isOn, onClick) {
+  const row = createElement("div", "toggle-row");
+  row.append(createElement("span", "", label));
+  const button = createElement("button", `toggle-button ${isOn ? "" : "off"}`, isOn ? "On" : "Off");
+  button.type = "button";
+  button.addEventListener("click", onClick);
+  row.append(button);
+  return row;
+}
+
+function createInfoRow(label, value) {
+  const row = createElement("div", "info-row");
+  row.append(createElement("span", "", label), createElement("strong", "", value));
+  return row;
+}
+
+function createElement(tagName, className = "", text = "") {
+  const element = document.createElement(tagName);
+  if (className) element.className = className;
+  if (text !== "") element.textContent = text;
+  return element;
+}
+
+function clearElement(element) {
+  while (element.firstChild) element.removeChild(element.firstChild);
+}
+
+function handleCanvasClick(event) {
+  const rect = canvas.getBoundingClientRect();
+  const x = ((event.clientX - rect.left) / rect.width) * canvas.width;
+  const y = ((event.clientY - rect.top) / rect.height) * canvas.height;
+  const clickedSeal = [...gameState.seals].reverse().find((seal) => pointInSeal(x, y, seal));
+  if (clickedSeal) {
+    gameState.selection = { type: "seal", id: clickedSeal.id };
+    return;
+  }
+  const clickedFacility = [...gameState.facilities].reverse().find((facility) => pointInRect(x, y, facilityRect(facility)));
+  if (clickedFacility) gameState.selection = { type: "facility", id: clickedFacility.id };
+}
+
+function pointInSeal(x, y, seal) {
+  const rect = gridRect(seal.position.x, seal.position.y, CONFIG.assetSizeRatio);
+  return pointInRect(x, y, { x: rect.x, y: rect.y, width: rect.size, height: rect.size });
+}
+
+function pointInRect(x, y, rect) {
+  return x >= rect.x && x <= rect.x + rect.width && y >= rect.y && y <= rect.y + rect.height;
+}
+
+function getFishingEfficiency(state) {
+  return clamp(state.resources.seaFish / CONFIG.maxSeaFish, CONFIG.lowSeaFishEfficiencyFloor, 1);
+}
+
+function getWorkPositionForFacility(facility) {
+  return { x: facility.position.x, y: Math.max(0, facility.position.y - 1) };
+}
+
+function getAssignedWorkers(state, facilityId) {
+  return state.seals.filter((seal) => seal.assignedFacilityId === facilityId);
+}
+
+function getIdleCount(state) {
+  return state.seals.filter((seal) => seal.currentTask === TASKS.idle || seal.currentTask === TASKS.waiting).length;
+}
+
+function getTotalStoredFish(state) {
+  return state.facilities.filter((facility) => facility.type === FACILITY_TYPES.storage).reduce((total, storage) => total + storage.inventory.fish, 0);
+}
+
+function getFacilityById(state, id) {
+  return state.facilities.find((facility) => facility.id === id);
+}
+
+function getSealById(state, id) {
+  return state.seals.find((seal) => seal.id === id);
+}
+
+function isSelected(state, type, id) {
+  return state.selection.type === type && state.selection.id === id;
 }
 
 function gridRect(gridX, gridY, tileRatio) {
   const size = CONFIG.tileSize * tileRatio;
   const offset = (CONFIG.tileSize - size) / 2;
-
-  return {
-    x: gridX * CONFIG.tileSize + offset,
-    y: gridY * CONFIG.tileSize + offset,
-    size,
-  };
+  return { x: gridX * CONFIG.tileSize + offset, y: gridY * CONFIG.tileSize + offset, size };
 }
 
-function buildingRect(gridX, gridY, widthTiles, heightTiles) {
-  return {
-    x: (gridX - widthTiles / 2 + 0.5) * CONFIG.tileSize,
-    y: (gridY - heightTiles / 2 + 0.5) * CONFIG.tileSize,
-    width: widthTiles * CONFIG.tileSize,
-    height: heightTiles * CONFIG.tileSize,
-  };
-}
-
-function isSealMoving(seal) {
-  return Boolean(seal.target) && !samePosition(seal.position, seal.target);
+function facilityRect(facility) {
+  const size = CONFIG.tileSize * CONFIG.facilitySizeTiles;
+  return { x: (facility.position.x + 0.5) * CONFIG.tileSize - size / 2, y: (facility.position.y + 0.5) * CONFIG.tileSize - size / 2, width: size, height: size };
 }
 
 function samePosition(a, b) {
-  if (!a || !b) {
-    return false;
-  }
-
+  if (!a || !b) return false;
   return Math.abs(a.x - b.x) < 0.001 && Math.abs(a.y - b.y) < 0.001;
 }
 
@@ -769,5 +857,7 @@ function clamp(value, min, max) {
 }
 
 ui.startButton.addEventListener("click", startGame);
+ui.selectToolButton.addEventListener("click", () => { gameState.message = "Select mode active: click a seal or facility."; });
+canvas.addEventListener("click", handleCanvasClick);
 render(gameState);
 requestAnimationFrame(gameLoop);
